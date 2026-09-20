@@ -9,7 +9,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     process.stdout.write(
-      `agy-mcp ${version}\n\nUsage: agy-mcp [--help | --version | --doctor]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace and CLI flags without starting a model turn.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_MAX_CONCURRENT (default 4, range 1-32), AGY_MCP_MAX_OUTPUT_CHARS,\nAGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_ALLOW_FULL_AUTONOMY.\nSee https://github.com/Kaikei-e/agy-mcp for setup.\n`,
+      `agy-mcp ${version}\n\nUsage: agy-mcp [--help | --version | --doctor]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace and CLI flags without starting a model turn.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL, AGY_MCP_MAX_CONCURRENT (default 4, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_ALLOW_FULL_AUTONOMY.\nSee https://github.com/Kaikei-e/agy-mcp for setup.\n`,
     );
     return;
   }
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
           }
       }
       process.stdout.write(
-        `Workspace: ${config.defaultWorkspace}\nAllowed root: ${config.allowedRoot ?? "unrestricted"}\nMax concurrent CLI processes: ${config.maxConcurrent}\nFull autonomy: ${config.allowFullAutonomy ? "enabled" : "disabled"}\nCLI compatibility checks passed. Authentication and workspace trust require an interactive agy session.\n`,
+        `Workspace: ${config.defaultWorkspace}\nAllowed root: ${config.allowedRoot ?? "unrestricted"}\nDefault model: ${config.defaultModel ?? "CLI default"}\nMax concurrent CLI processes: ${config.maxConcurrent}\nFull autonomy: ${config.allowFullAutonomy ? "enabled" : "disabled"}\nCLI compatibility checks passed. Authentication and workspace trust require an interactive agy session.\n`,
       );
     } finally {
       await runner.close();

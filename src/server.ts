@@ -5,6 +5,7 @@ import { resolveWorkspace, type Config } from "./config.js";
 import { ProcessRunner } from "./process.js";
 import { toToolResult } from "./result.js";
 import { version } from "./version.js";
+import { validateModelSlug } from "./policy.js";
 
 const text = (max: number) =>
   z
@@ -12,6 +13,10 @@ const text = (max: number) =>
     .min(1)
     .max(max)
     .refine((value) => !value.includes("\0"), "NUL characters are not allowed");
+
+const policy =
+  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-mcp or delegating back.";
+
 const commonInput = {
   prompt: text(32_000)
     .refine((value) => value.trim().length > 0, "prompt cannot be blank")
@@ -26,13 +31,17 @@ const commonInput = {
   // Values starting with a dash can be reinterpreted as CLI flags by argument
   // parsers, including agy's permission-bypass flag.
   model: text(200)
-    .refine(
-      (value) => !value.startsWith("-"),
-      "model must not start with a dash",
-    )
+    .refine((value) => {
+      try {
+        validateModelSlug(value, "model");
+        return true;
+      } catch {
+        return false;
+      }
+    }, "model must not start with a dash, contain whitespace, or NUL")
     .optional()
     .describe(
-      "Model slug from antigravity_models. Omit to use the CLI default.",
+      "Model slug from antigravity_models. Omit to use server default (AGY_MCP_DEFAULT_MODEL) or CLI default.",
     ),
   mode: z
     .enum(["plan", "accept-edits"])
@@ -59,7 +68,10 @@ const commonInput = {
 };
 
 export function createServer(config: Config, runner: ProcessRunner): McpServer {
-  const server = new McpServer({ name: "agy-mcp", version });
+  const server = new McpServer(
+    { name: "agy-mcp", version },
+    { instructions: policy },
+  );
 
   async function execute(
     args: z.infer<z.ZodObject<typeof commonInput>> & {
@@ -144,7 +156,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     "antigravity_run",
     {
       title: "Run Antigravity",
-      description: `Start one Antigravity CLI turn in a new conversation. Useful for repository research, a second opinion, and explicitly requested edits. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Parallel calls share workspace files and your existing Antigravity account and quota.`,
+      description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Parallel calls share workspace files, Antigravity account and quota.`,
       inputSchema: z.object(commonInput).strict(),
       annotations,
     },
@@ -155,8 +167,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     "antigravity_continue",
     {
       title: "Continue Antigravity",
-      description:
-        "Follow up in an existing Antigravity conversation. Different explicit conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Without an ID, agy resumes its most recent conversation and requires exclusive access to this server, otherwise BUSY is returned. Other CLI sessions may change the latest conversation. Use the same workspace as the original turn.",
+      description: `Policy: ${policy} Follow up in an existing Antigravity conversation. Different explicit conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Without an ID, agy resumes its most recent conversation and requires exclusive access to this server, otherwise BUSY is returned. Other CLI sessions may change the latest conversation. Use the same workspace as the original turn.`,
       inputSchema: z
         .object({ ...commonInput, conversation_id: z.uuid().optional() })
         .strict(),

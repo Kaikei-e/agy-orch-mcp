@@ -1,10 +1,12 @@
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { validateModelSlug } from "./policy.js";
 
 export interface Config {
   bin: string;
   defaultWorkspace: string;
   allowedRoot?: string;
+  defaultModel?: string;
   maxOutputChars: number;
   maxBufferBytes: number;
   maxConcurrent: number;
@@ -69,6 +71,10 @@ export function loadConfig(
       env.AGY_MCP_ALLOWED_ROOT === undefined
         ? undefined
         : directory(path.resolve(cwd, env.AGY_MCP_ALLOWED_ROOT)),
+    defaultModel: validateModelSlug(
+      env.AGY_MCP_DEFAULT_MODEL,
+      "AGY_MCP_DEFAULT_MODEL",
+    ),
     maxOutputChars: integer(
       env,
       "AGY_MCP_MAX_OUTPUT_CHARS",

@@ -8,3 +8,8 @@ coverage/
 !.env.example
 .serena/
 .DS_Store
+
+# Personal MCP client settings
+.mcp.json
+.codex/
+.claude/settings.local.json

@@ -135,18 +135,24 @@ export async function runAgy(
         "full autonomy requires AGY_MCP_ALLOW_FULL_AUTONOMY=true in the server environment",
     };
   }
+  const resolvedOptions: RunOptions = {
+    ...options,
+    model: options.model ?? config.defaultModel,
+  };
   let pending = "";
   let lastProgress = 0;
   const processResult = await runner.run({
     bin: config.bin,
-    args: buildArgs(options),
-    cwd: options.workspace,
-    timeoutMs: (options.timeoutSec ?? 300) * 1_000,
+    args: buildArgs(resolvedOptions),
+    cwd: resolvedOptions.workspace,
+    timeoutMs: (resolvedOptions.timeoutSec ?? 300) * 1_000,
     maxBufferBytes: config.maxBufferBytes,
-    signal: options.signal,
+    signal: resolvedOptions.signal,
     // UUIDs are case-insensitive. Only implicit continuation needs exclusivity.
-    lockKey: options.conversationId?.toLowerCase(),
-    exclusive: Boolean(options.continueLatest && !options.conversationId),
+    lockKey: resolvedOptions.conversationId?.toLowerCase(),
+    exclusive: Boolean(
+      resolvedOptions.continueLatest && !resolvedOptions.conversationId,
+    ),
     onStdout: (chunk) => {
       pending += chunk;
       let newline: number;
@@ -161,7 +167,7 @@ export async function runAgy(
           ) {
             lastProgress = Date.now();
             // Avoid forwarding prompts, tool arguments, or model reasoning in progress.
-            options.onProgress?.("Antigravity is processing the task");
+            resolvedOptions.onProgress?.("Antigravity is processing the task");
           }
         } catch {
           /* The final parser reports unrecognized output. */
@@ -176,12 +182,16 @@ export async function runAgy(
     if (!parsed.parsed)
       error ??=
         "agy did not return a recognized result envelope. Check authentication, workspace trust, and CLI version.";
-    else if (status === "SUCCESS" && !parsed.response.trim()) {
+    else if (status === "SUCCESS" && parsed.deniedActions?.length) {
+      status = "PERMISSION_DENIED";
+      error ??=
+        "agy reported denied actions. Review the requested permissions before retrying.";
+    } else if (status === "SUCCESS" && !parsed.response.trim()) {
       status = "EMPTY_RESPONSE";
       error ??=
         "agy reported success with an empty response. Review the conversation before retrying; the task may have had side effects.";
     }
-    if (parsed.deniedActions?.length)
+    if (parsed.deniedActions?.length && status !== "PERMISSION_DENIED")
       error ??=
         "agy reported denied actions. Review the requested permissions before retrying.";
     if (processResult.exitCode !== 0)

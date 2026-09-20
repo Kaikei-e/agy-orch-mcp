@@ -2,6 +2,7 @@
 # in a trusted project. Replace every placeholder with an absolute path.
 # Preserve existing settings and edit an existing table with this name rather
 # than defining [mcp_servers.antigravity] twice.
+# After updating configuration, restart the Codex CLI or IDE session.
 
 [mcp_servers.antigravity]
 command = "/absolute/path/to/node"
@@ -13,5 +14,9 @@ tool_timeout_sec = 3660
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"
 AGY_MCP_ALLOWED_ROOT = "/absolute/path/to"
 AGY_MCP_MAX_CONCURRENT = "4"
-# Remove this entry when `agy` is available in Codex's PATH.
+# Recommended compact output limit (characters) to conserve host context window:
+# AGY_MCP_MAX_OUTPUT_CHARS = "16000"
+# Optional default model slug discovered via `antigravity_models`:
+# AGY_MCP_DEFAULT_MODEL = "a-slug-returned-by-antigravity_models"
+# Remove this entry when `agy` is available in Codex's PATH:
 AGY_MCP_BIN = "/absolute/path/to/agy"

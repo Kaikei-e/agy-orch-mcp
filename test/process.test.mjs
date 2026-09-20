@@ -290,7 +290,14 @@ test(
 test("CLI result failures never masquerade as success", async (t) => {
   const runner = new ProcessRunner();
   t.after(() => runner.close());
-  for (const prompt of ["error", "empty", "malformed", "nonzero", "denied"]) {
+  for (const prompt of [
+    "error",
+    "empty",
+    "malformed",
+    "nonzero",
+    "denied",
+    "denied-empty",
+  ]) {
     const result = await runAgy(
       { prompt, workspace: process.cwd() },
       config,
@@ -298,6 +305,18 @@ test("CLI result failures never masquerade as success", async (t) => {
     );
     assert.equal(result.ok, false, prompt);
     assert.ok(result.error, prompt);
+    if (prompt === "denied") {
+      assert.equal(result.status, "PERMISSION_DENIED");
+      assert.notEqual(result.response, "");
+      assert.ok(result.conversationId);
+      assert.deepEqual(result.deniedActions, [{ tool: "write_to_file" }]);
+    }
+    if (prompt === "denied-empty") {
+      assert.equal(result.status, "PERMISSION_DENIED");
+      assert.equal(result.response, "");
+      assert.ok(result.conversationId);
+      assert.deepEqual(result.deniedActions, [{ tool: "write_to_file" }]);
+    }
   }
   const success = await runAgy(
     { prompt: "literal ; $(touch must-not-exist)", workspace: process.cwd() },
@@ -319,4 +338,46 @@ test("CLI result failures never masquerade as success", async (t) => {
     ).status,
     "POLICY_ERROR",
   );
+});
+
+test("hard process failures take precedence over denied actions", async (t) => {
+  const fakeRunner = {
+    run: async () => ({
+      failure: "TIMEOUT",
+      error: "process timed out after 5000ms",
+      stdout: JSON.stringify({
+        event: "result",
+        result: {
+          status: "SUCCESS",
+          response: "partial output",
+          conversation_id: "fake-timeout-id",
+          denied_actions: [{ tool: "write_to_file" }],
+        },
+      }),
+      stderr: "",
+      exitCode: null,
+    }),
+  };
+  const timeoutResult = await runAgy(
+    { prompt: "any", workspace: process.cwd() },
+    config,
+    fakeRunner,
+  );
+  assert.equal(timeoutResult.ok, false);
+  assert.equal(timeoutResult.status, "TIMEOUT");
+  assert.equal(timeoutResult.error, "process timed out after 5000ms");
+  assert.equal(timeoutResult.conversationId, "fake-timeout-id");
+  assert.deepEqual(timeoutResult.deniedActions, [{ tool: "write_to_file" }]);
+
+  const runner = new ProcessRunner();
+  t.after(() => runner.close());
+  const controller = new AbortController();
+  controller.abort();
+  const canceledResult = await runAgy(
+    { prompt: "denied", workspace: process.cwd(), signal: controller.signal },
+    config,
+    runner,
+  );
+  assert.equal(canceledResult.ok, false);
+  assert.equal(canceledResult.status, "CANCELED");
 });

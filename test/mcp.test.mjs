@@ -22,19 +22,22 @@ const server = path.join(root, "dist", "index.js");
 const fixture = path.join(root, "test", "fixtures", "agy.mjs");
 
 function clientPair(extraEnv = {}, options = {}) {
+  const env = {
+    ...process.env,
+    AGY_MCP_BIN: fixture,
+    AGY_MCP_DEFAULT_WORKSPACE: root,
+    AGY_MCP_ALLOWED_ROOT: root,
+    AGY_MCP_MAX_CONCURRENT: "4",
+  };
+  delete env.AGY_MCP_DEFAULT_MODEL;
+  Object.assign(env, extraEnv);
+
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [server],
     cwd: root,
     stderr: "pipe",
-    env: {
-      ...process.env,
-      AGY_MCP_BIN: fixture,
-      AGY_MCP_DEFAULT_WORKSPACE: root,
-      AGY_MCP_ALLOWED_ROOT: root,
-      AGY_MCP_MAX_CONCURRENT: "4",
-      ...extraEnv,
-    },
+    env,
   });
   const client = new Client(
     { name: "agy-mcp-integration-test", version: "1.0.0" },
@@ -83,6 +86,28 @@ test("legacy and modern MCP negotiation expose all three tools", async (t) => {
     "antigravity_models",
     "antigravity_run",
   ]);
+  const legacyInstructions = legacy.client.getInstructions();
+  assert.ok(
+    legacyInstructions?.includes("Host acts only as orchestrator"),
+    "legacy client must receive routing policy instructions",
+  );
+  assert.ok(
+    legacyInstructions?.includes(
+      "without recursively invoking agy-mcp or delegating back",
+    ),
+  );
+  const legacyToolList = (await legacy.client.listTools()).tools;
+  const runDesc = legacyToolList.find(
+    (tool) => tool.name === "antigravity_run",
+  )?.description;
+  assert.match(runDesc, /Policy:/);
+  assert.match(runDesc, /concurrently/);
+  const continueDesc = legacyToolList.find(
+    (tool) => tool.name === "antigravity_continue",
+  )?.description;
+  assert.match(continueDesc, /Policy:/);
+  assert.match(continueDesc, /parallel/);
+  assert.match(continueDesc, /BUSY/);
 
   const modern = await connected(
     {},
@@ -91,6 +116,16 @@ test("legacy and modern MCP negotiation expose all three tools", async (t) => {
   t.after(() => closePair(modern));
   assert.equal(modern.client.getProtocolEra(), "modern");
   assert.equal(modern.client.getNegotiatedProtocolVersion(), "2026-07-28");
+  const modernInstructions = modern.client.getInstructions();
+  assert.ok(
+    modernInstructions?.includes("Host acts only as orchestrator"),
+    "modern client must receive routing policy instructions",
+  );
+  assert.ok(
+    modernInstructions?.includes(
+      "without recursively invoking agy-mcp or delegating back",
+    ),
+  );
   const modernTools = (await modern.client.listTools()).tools
     .map((tool) => tool.name)
     .sort();
@@ -192,19 +227,36 @@ test("validation, policy, and workspace failures are returned as tool errors", a
   assert.equal(denied.isError, true);
   assert.equal(valueOf(denied).status, "POLICY_ERROR");
 
-  const unsafeModel = await pair.client.callTool({
-    name: "antigravity_run",
-    arguments: {
-      prompt: "ok",
-      model: "--dangerously-skip-permissions",
-      timeout_seconds: 10,
-    },
-  });
-  assert.equal(unsafeModel.isError, true);
-  assert.match(
-    String(unsafeModel.content?.[0]?.text),
-    /model must not start with a dash/i,
-  );
+  for (const badModel of [
+    "--dangerously-skip-permissions",
+    "-model",
+    "model with spaces",
+    "model\twith\ttab",
+    "model\nwith\nnewline",
+    "model\rwith\rcarriage",
+    "model\0with\0nul",
+    "a".repeat(201),
+  ]) {
+    const unsafeRun = await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: { prompt: "ok", model: badModel, timeout_seconds: 10 },
+    });
+    assert.equal(
+      unsafeRun.isError,
+      true,
+      `antigravity_run should reject model: ${JSON.stringify(badModel)}`,
+    );
+
+    const unsafeContinue = await pair.client.callTool({
+      name: "antigravity_continue",
+      arguments: { prompt: "ok", model: badModel, timeout_seconds: 10 },
+    });
+    assert.equal(
+      unsafeContinue.isError,
+      true,
+      `antigravity_continue should reject model: ${JSON.stringify(badModel)}`,
+    );
+  }
 });
 
 test("progress notifications and bounded tool results survive the MCP boundary", async (t) => {
@@ -429,3 +481,181 @@ test(
     );
   },
 );
+
+test("MCP env-model precedence on antigravity_run and antigravity_continue", async (t) => {
+  const pairWithDefault = await connected({
+    AGY_MCP_DEFAULT_MODEL: "default-test-model",
+  });
+  t.after(() => closePair(pairWithDefault));
+
+  // 1. Configured default model used when no request model on antigravity_run
+  const runDefault = await pairWithDefault.client.callTool({
+    name: "antigravity_run",
+    arguments: { prompt: "run-default", workspace: root, timeout_seconds: 10 },
+  });
+  const runDefaultVal = valueOf(runDefault);
+  assert.equal(runDefaultVal.ok, true);
+  const runDefaultArgv = JSON.parse(runDefaultVal.response).argv;
+  assert.ok(runDefaultArgv.includes("--model"));
+  assert.equal(
+    runDefaultArgv[runDefaultArgv.indexOf("--model") + 1],
+    "default-test-model",
+  );
+
+  // 2. Configured default model used when no request model on antigravity_continue
+  const contDefault = await pairWithDefault.client.callTool({
+    name: "antigravity_continue",
+    arguments: {
+      prompt: "cont-default",
+      conversation_id: runDefaultVal.conversation_id,
+      workspace: root,
+      timeout_seconds: 10,
+    },
+  });
+  const contDefaultVal = valueOf(contDefault);
+  assert.equal(contDefaultVal.ok, true);
+  const contDefaultArgv = JSON.parse(contDefaultVal.response).argv;
+  assert.ok(contDefaultArgv.includes("--model"));
+  assert.equal(
+    contDefaultArgv[contDefaultArgv.indexOf("--model") + 1],
+    "default-test-model",
+  );
+
+  // 3. Request model overrides configured default on antigravity_run
+  const runOverride = await pairWithDefault.client.callTool({
+    name: "antigravity_run",
+    arguments: {
+      prompt: "run-override",
+      workspace: root,
+      model: "override-test-model",
+      timeout_seconds: 10,
+    },
+  });
+  const runOverrideVal = valueOf(runOverride);
+  assert.equal(runOverrideVal.ok, true);
+  const runOverrideArgv = JSON.parse(runOverrideVal.response).argv;
+  assert.ok(runOverrideArgv.includes("--model"));
+  assert.equal(
+    runOverrideArgv[runOverrideArgv.indexOf("--model") + 1],
+    "override-test-model",
+  );
+  assert.ok(!runOverrideArgv.includes("default-test-model"));
+
+  // 4. Request model overrides configured default on antigravity_continue
+  const contOverride = await pairWithDefault.client.callTool({
+    name: "antigravity_continue",
+    arguments: {
+      prompt: "cont-override",
+      conversation_id: runDefaultVal.conversation_id,
+      workspace: root,
+      model: "override-test-model",
+      timeout_seconds: 10,
+    },
+  });
+  const contOverrideVal = valueOf(contOverride);
+  assert.equal(contOverrideVal.ok, true);
+  const contOverrideArgv = JSON.parse(contOverrideVal.response).argv;
+  assert.ok(contOverrideArgv.includes("--model"));
+  assert.equal(
+    contOverrideArgv[contOverrideArgv.indexOf("--model") + 1],
+    "override-test-model",
+  );
+  assert.ok(!contOverrideArgv.includes("default-test-model"));
+
+  // Pair without AGY_MCP_DEFAULT_MODEL
+  const pairWithoutDefault = await connected();
+  t.after(() => closePair(pairWithoutDefault));
+
+  // 5. No --model passed on antigravity_run when neither set
+  const runNoModel = await pairWithoutDefault.client.callTool({
+    name: "antigravity_run",
+    arguments: { prompt: "run-no-model", workspace: root, timeout_seconds: 10 },
+  });
+  const runNoModelVal = valueOf(runNoModel);
+  assert.equal(runNoModelVal.ok, true);
+  const runNoModelArgv = JSON.parse(runNoModelVal.response).argv;
+  assert.ok(!runNoModelArgv.includes("--model"));
+
+  // 6. No --model passed on antigravity_continue when neither set
+  const contNoModel = await pairWithoutDefault.client.callTool({
+    name: "antigravity_continue",
+    arguments: {
+      prompt: "cont-no-model",
+      conversation_id: runNoModelVal.conversation_id,
+      workspace: root,
+      timeout_seconds: 10,
+    },
+  });
+  const contNoModelVal = valueOf(contNoModel);
+  assert.equal(contNoModelVal.ok, true);
+  const contNoModelArgv = JSON.parse(contNoModelVal.response).argv;
+  assert.ok(!contNoModelArgv.includes("--model"));
+});
+
+test("SUCCESS with denied_actions returns PERMISSION_DENIED across MCP, preserving response, conversation_id, denied_actions", async (t) => {
+  const pair = await connected();
+  t.after(() => closePair(pair));
+
+  // 1. Nonempty response with denied_actions
+  const nonemptyDenied = await pair.client.callTool({
+    name: "antigravity_run",
+    arguments: { prompt: "denied", workspace: root, timeout_seconds: 10 },
+  });
+  assert.equal(nonemptyDenied.isError, true);
+  const nonemptyVal = valueOf(nonemptyDenied);
+  assert.equal(nonemptyVal.ok, false);
+  assert.equal(nonemptyVal.status, "PERMISSION_DENIED");
+  assert.ok(nonemptyVal.conversation_id);
+  assert.deepEqual(nonemptyVal.denied_actions, [{ tool: "write_to_file" }]);
+  assert.ok(nonemptyVal.response.length > 0);
+  assert.match(nonemptyVal.response, /"prompt":"denied"/);
+  assert.match(nonemptyVal.error, /denied actions/);
+
+  // 2. Empty response with denied_actions
+  const emptyDenied = await pair.client.callTool({
+    name: "antigravity_run",
+    arguments: { prompt: "denied-empty", workspace: root, timeout_seconds: 10 },
+  });
+  assert.equal(emptyDenied.isError, true);
+  const emptyVal = valueOf(emptyDenied);
+  assert.equal(emptyVal.ok, false);
+  assert.equal(emptyVal.status, "PERMISSION_DENIED");
+  assert.ok(emptyVal.conversation_id);
+  assert.deepEqual(emptyVal.denied_actions, [{ tool: "write_to_file" }]);
+  assert.equal(emptyVal.response, "");
+  assert.match(emptyVal.error, /denied actions/);
+
+  // 3. Continue turn with denied_actions preserves conversation_id
+  const contDenied = await pair.client.callTool({
+    name: "antigravity_continue",
+    arguments: {
+      prompt: "denied",
+      conversation_id: nonemptyVal.conversation_id,
+      workspace: root,
+      timeout_seconds: 10,
+    },
+  });
+  assert.equal(contDenied.isError, true);
+  const contVal = valueOf(contDenied);
+  assert.equal(contVal.ok, false);
+  assert.equal(contVal.status, "PERMISSION_DENIED");
+  assert.equal(contVal.conversation_id, nonemptyVal.conversation_id);
+  assert.deepEqual(contVal.denied_actions, [{ tool: "write_to_file" }]);
+
+  // 4. Client cancellation takes precedence over denied actions
+  const controller = new AbortController();
+  const pendingCancel = pair.client.callTool(
+    {
+      name: "antigravity_run",
+      arguments: {
+        prompt: "denied-hang",
+        workspace: root,
+        timeout_seconds: 10,
+      },
+    },
+    { signal: controller.signal },
+  );
+  await delay(100);
+  controller.abort();
+  await assert.rejects(pendingCancel, /abort|cancel|closed/i);
+});

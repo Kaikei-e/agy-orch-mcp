@@ -40,6 +40,19 @@ if (args[0] === "--version") {
 } else if (prompt === "overflow") {
   process.stdout.write("x".repeat(100_000));
   setInterval(() => {}, 1_000);
+} else if (prompt === "denied-hang") {
+  process.on("SIGTERM", () => {});
+  emit({ event: "init", conversation_id: id });
+  emit({
+    event: "result",
+    result: {
+      status: "SUCCESS",
+      response: "denied but hanging",
+      conversation_id: id,
+      denied_actions: [{ tool: "write_to_file" }],
+    },
+  });
+  setInterval(() => {}, 1_000);
 } else if (prompt === "malformed") {
   console.log("Authentication required");
 } else {
@@ -60,7 +73,7 @@ if (args[0] === "--version") {
   const result = {
     status: prompt === "error" ? "ERROR" : "SUCCESS",
     response:
-      prompt === "empty"
+      prompt === "empty" || prompt === "denied-empty"
         ? ""
         : prompt === "large"
           ? "語".repeat(80_000)
@@ -74,7 +87,7 @@ if (args[0] === "--version") {
     duration_seconds: 0.01,
     usage: { total_tokens: 42 },
     ...(prompt === "error" ? { error: { message: "Model unavailable" } } : {}),
-    ...(prompt === "denied"
+    ...(prompt === "denied" || prompt === "denied-empty"
       ? { denied_actions: [{ tool: "write_to_file" }] }
       : {}),
   };

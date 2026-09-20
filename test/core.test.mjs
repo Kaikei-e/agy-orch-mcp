@@ -37,6 +37,38 @@ test("configuration validates numeric limits and booleans", () => {
   assert.equal(loadConfig({}).allowFullAutonomy, false);
 });
 
+test("configuration validates AGY_MCP_DEFAULT_MODEL", () => {
+  assert.throws(
+    () => loadConfig({ AGY_MCP_DEFAULT_MODEL: "" }),
+    /must be between/,
+  );
+  assert.throws(
+    () => loadConfig({ AGY_MCP_DEFAULT_MODEL: "a".repeat(201) }),
+    /must be between/,
+  );
+  for (const bad of [
+    "test\0model",
+    "test model",
+    "test\tmodel",
+    "test\nmodel",
+    "test\rmodel",
+    "-test-model",
+  ]) {
+    assert.throws(
+      () => loadConfig({ AGY_MCP_DEFAULT_MODEL: bad }),
+      /must not contain whitespace, NUL, or start with a dash/,
+    );
+  }
+  assert.equal(
+    loadConfig({ AGY_MCP_DEFAULT_MODEL: "test-model" }).defaultModel,
+    "test-model",
+  );
+  assert.equal(
+    loadConfig({ AGY_MCP_DEFAULT_MODEL: "a".repeat(200) }).defaultModel,
+    "a".repeat(200),
+  );
+});
+
 test("parallelism defaults to four and accepts only bounded positive integers", () => {
   assert.equal(loadConfig({}).maxConcurrent, 4);
   for (const value of ["1", "2", "32"])
