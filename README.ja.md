@@ -1,8 +1,8 @@
-# agy-mcp
+# agy-orch-mcp
 
 [English](README.md) · [設計ドキュメント](docs/design.ja.md) · [Apache-2.0](LICENSE)
 
-`agy-mcp` は、MCP クライアントから Google Antigravity CLI (`agy`) にタスクを委譲するための、ローカル [Model Context Protocol](https://modelcontextprotocol.io/) サーバーです。stdio で通信し、`agy` を子プロセスとして起動して、結果を構造化された MCP コンテンツとして返します。
+`agy-orch-mcp` は、MCP クライアントから Google Antigravity CLI (`agy`) にタスクを委譲するための、ローカル [Model Context Protocol](https://modelcontextprotocol.io/) サーバーです。stdio で通信し、`agy` を子プロセスとして起動して、結果を構造化された MCP コンテンツとして返します。
 
 個人のローカル利用を主目的にしつつ、OSS としてコードの確認・改変・貢献ができる形を目指しています。Antigravity の公式製品ではなく、Antigravity 側のアカウント、信頼設定、権限設定を置き換えるものでもありません。
 
@@ -10,11 +10,11 @@
 
 詳細なアーキテクチャ、設計意図、および検証計画については [docs/design.ja.md](docs/design.ja.md) を参照してください。
 
-`agy-mcp` は **agy-first** の役割分担を前提として設計されています：
+`agy-orch-mcp` は **agy-first** の役割分担を前提として設計されています：
 
 - **外部フロンティアホスト**: Codex CLI / IDE や Claude Code などの外部ホスト環境は、高次のオーケストレーターとして振る舞います。タスクの分割、構造化された指示パケットの作成、最終差分（diff）およびエビデンスのレビューに専念し、直接の広範な調査やコード編集を避けます。
 - **Antigravity 実行エンジン**: ローカルの Antigravity CLI (`agy`) が主実行エンジンとなり、リポジトリ調査、Web 仕様調査、実装、テスト実行、セルフ修正ループを担当します。
-- **再帰・逆委譲の禁止**: 委譲を受けた Antigravity CLI セッションは、提供されているネイティブツールを用いて直接タスクを完了します。自身から `agy-mcp` を再帰的に呼び出したり、外部ホストへ作業を差し戻してはなりません。
+- **再帰・逆委譲の禁止**: 委譲を受けた Antigravity CLI セッションは、提供されているネイティブツールを用いて直接タスクを完了します。自身から `agy-orch-mcp` を再帰的に呼び出したり、外部ホストへ作業を差し戻してはなりません。
 - **委譲ガイダンスとホスト機能**: サーバーは初期化時の instructions およびツール説明を通じて、ホストが Antigravity へタスクを委譲するよう誘導します。これは既定の運用方針を示すガイダンスであり、ホストが持つ他の組み込みツールを強制的に無効化するものではありません。
 
 ## 提供するツール
@@ -52,7 +52,7 @@
 - **ブリッジによるステータス分類**: 本ブリッジは CLI の出力エンベロープを解析し、適切なステータスに分類します：
   - `agy` が `SUCCESS` ステータスを返しても `denied_actions` が含まれている場合、ブリッジは結果を `status: "PERMISSION_DENIED"` に分類し、具体的な案内を提供するとともに出力メタデータ内に `denied_actions` 一覧を保持します。
   - `agy` が `SUCCESS` ステータスで空の応答本文を返した場合、ブリッジはこれを `status: "EMPTY_RESPONSE"` に分類し、再試行前にワークスペース内の変更（副作用）を確認するよう警告します。
-  - _(注: これらは Antigravity CLI 自体が出力するステータスではなく、MCP ツールとしての安全な振る舞いを保証するために `agy-mcp` ブリッジ層が付与する分類です)_。
+  - _(注: これらは Antigravity CLI 自体が出力するステータスではなく、MCP ツールとしての安全な振る舞いを保証するために `agy-orch-mcp` ブリッジ層が付与する分類です)_。
 
 ### 構造化指示パケット (Task Packet)
 
@@ -99,8 +99,8 @@
 ## ソースから導入する
 
 ```bash
-git clone https://github.com/Kaikei-e/agy-mcp.git
-cd agy-mcp
+git clone https://github.com/Kaikei-e/agy-orch-mcp.git
+cd agy-orch-mcp
 pnpm install --frozen-lockfile
 pnpm build
 pnpm run doctor
@@ -132,7 +132,7 @@ probe は返された会話に対して `run` と `continue` を実行します�
   "mcpServers": {
     "antigravity": {
       "command": "node",
-      "args": ["/absolute/path/to/agy-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/agy-orch-mcp/dist/index.js"],
       "env": {
         "AGY_MCP_DEFAULT_WORKSPACE": "/absolute/path/to/workspace",
         "AGY_MCP_ALLOWED_ROOT": "/absolute/path/to",
@@ -153,7 +153,7 @@ _推奨_: `AGY_MCP_MAX_OUTPUT_CHARS="16000"` を指定すると、ツールの�
 ```toml
 [mcp_servers.antigravity]
 command = "/absolute/path/to/node"
-args = ["/absolute/path/to/agy-mcp/dist/index.js"]
+args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 startup_timeout_sec = 20
 tool_timeout_sec = 3660
 
@@ -177,7 +177,7 @@ codex mcp add antigravity \
   --env "AGY_MCP_ALLOWED_ROOT=/absolute/path/to" \
   --env "AGY_MCP_MAX_CONCURRENT=4" \
   --env "AGY_MCP_MAX_OUTPUT_CHARS=16000" \
-  -- "/absolute/path/to/node" "/absolute/path/to/agy-mcp/dist/index.js"
+  -- "/absolute/path/to/node" "/absolute/path/to/agy-orch-mcp/dist/index.js"
 ```
 
 登録後、`config.toml` に `startup_timeout_sec = 20` と `tool_timeout_sec = 3660` を追加してください。

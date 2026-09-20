@@ -1,6 +1,6 @@
 # Agent Delegation Policy (agy-first)
 
-This repository adopts an **agy-first** execution model: an external frontier AI assistant (such as Codex CLI/IDE or Claude Code) acts as the high-level orchestrator, while the Google Antigravity CLI (`agy` via `agy-mcp`) serves as the primary execution engine.
+This repository adopts an **agy-first** execution model: an external frontier AI assistant (such as Codex CLI/IDE or Claude Code) acts as the high-level orchestrator, while the Google Antigravity CLI (`agy` via `agy-orch-mcp`) serves as the primary execution engine.
 
 ## Roles & Responsibilities
 
@@ -12,7 +12,7 @@ This repository adopts an **agy-first** execution model: an external frontier AI
 - **Antigravity CLI Worker**:
   - Receives delegated tasks via `antigravity_run` or `antigravity_continue`.
   - Performs repository exploration, web search, code modifications, and test execution directly within its workspace.
-  - **No Recursive Delegation**: A worker executing a delegated task must complete the task using native tools and MUST NOT recursively invoke `agy-mcp` or delegate back to the host.
+  - **No Recursive Delegation**: A worker executing a delegated task must complete the task using native tools and MUST NOT recursively invoke `agy-orch-mcp` or delegate back to the host.
 
 ## Task Packet Specification
 

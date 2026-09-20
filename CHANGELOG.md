@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed tool and repository to `agy-orch-mcp`.
+
 ### Added
 
 - MCP initialization instructions and tool descriptions providing default delegation guidance for client hosts.

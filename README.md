@@ -1,8 +1,8 @@
-# agy-mcp
+# agy-orch-mcp
 
 [日本語](README.ja.md) · [設計ドキュメント (Japanese Design Doc)](docs/design.ja.md) · [Apache-2.0](LICENSE)
 
-`agy-mcp` is a local [Model Context Protocol](https://modelcontextprotocol.io/) server that lets an MCP client delegate work to the Google Antigravity CLI (`agy`). It communicates over stdio, starts `agy` as a child process, and returns CLI output as structured MCP content.
+`agy-orch-mcp` is a local [Model Context Protocol](https://modelcontextprotocol.io/) server that lets an MCP client delegate work to the Google Antigravity CLI (`agy`). It communicates over stdio, starts `agy` as a child process, and returns CLI output as structured MCP content.
 
 It is designed for personal local workflows and open-source adaptation. It is not an official Antigravity product and does not replace Antigravity's access controls or account requirements.
 
@@ -10,11 +10,11 @@ It is designed for personal local workflows and open-source adaptation. It is no
 
 For detailed architecture, design rationale, and operational planning, see [docs/design.ja.md](docs/design.ja.md) (in Japanese).
 
-`agy-mcp` enables an **agy-first** division of labor:
+`agy-orch-mcp` enables an **agy-first** division of labor:
 
 - **External Frontier Host**: Codex CLI/IDE or Claude Code acts as the orchestrator. The host focuses on task decomposition, structured prompt packet formulation, and final review of diffs and evidence. It avoids performing repository investigation, web search, or code editing directly.
 - **Antigravity Execution Engine**: The local Antigravity CLI (`agy`) serves as the execution engine, handling repository research, web searches, code modification, testing, and self-correction loops.
-- **No Recursive Delegation**: An Antigravity CLI session executing a delegated task must complete its work directly using native tools. It must not recursively call `agy-mcp` or delegate work back to the host.
+- **No Recursive Delegation**: An Antigravity CLI session executing a delegated task must complete its work directly using native tools. It must not recursively call `agy-orch-mcp` or delegate work back to the host.
 - **Delegation Guidance vs. Host Capabilities**: The server supplies MCP initialization instructions and tool descriptions that guide the client host to delegate execution tasks to Antigravity. These instructions express default workflow guidance; they do not and cannot forcibly disable or replace the host's other built-in tools.
 
 ## What it provides
@@ -52,7 +52,7 @@ The default request settings are `mode: "plan"` and `autonomy: "safe"`.
 - **Bridge Error Classification**: The bridge parses raw CLI output envelopes and refines the status:
   - When `agy` outputs a `SUCCESS` status but records `denied_actions`, the bridge classifies the result as `status: "PERMISSION_DENIED"` with actionable error guidance, preserving the `denied_actions` list in the response metadata.
   - When `agy` outputs a `SUCCESS` status with an empty response string, the bridge classifies the result as `status: "EMPTY_RESPONSE"`, alerting the caller to review potential workspace side effects before retrying.
-  - _(Note: These classifications are synthesized by the `agy-mcp` bridge layer to provide robust MCP semantics, rather than raw CLI terminal statuses)._
+  - _(Note: These classifications are synthesized by the `agy-orch-mcp` bridge layer to provide robust MCP semantics, rather than raw CLI terminal statuses)._
 
 ### Structured Task Packets
 
@@ -99,8 +99,8 @@ Official documentation references:
 ## Install from Source
 
 ```bash
-git clone https://github.com/Kaikei-e/agy-mcp.git
-cd agy-mcp
+git clone https://github.com/Kaikei-e/agy-orch-mcp.git
+cd agy-orch-mcp
 pnpm install --frozen-lockfile
 pnpm build
 pnpm run doctor
@@ -132,7 +132,7 @@ For Claude Code, add a stdio server entry to `.mcp.json` in your project root:
   "mcpServers": {
     "antigravity": {
       "command": "node",
-      "args": ["/absolute/path/to/agy-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/agy-orch-mcp/dist/index.js"],
       "env": {
         "AGY_MCP_DEFAULT_WORKSPACE": "/absolute/path/to/workspace",
         "AGY_MCP_ALLOWED_ROOT": "/absolute/path/to",
@@ -153,7 +153,7 @@ For Codex CLI or Codex IDE, add the stdio server to `~/.codex/config.toml` (glob
 ```toml
 [mcp_servers.antigravity]
 command = "/absolute/path/to/node"
-args = ["/absolute/path/to/agy-mcp/dist/index.js"]
+args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 startup_timeout_sec = 20
 tool_timeout_sec = 3660
 
@@ -162,7 +162,7 @@ AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"
 AGY_MCP_ALLOWED_ROOT = "/absolute/path/to"
 AGY_MCP_MAX_CONCURRENT = "4"
 # Recommended compact output limit to protect host context:
-AGY_MCP_MAX_OUTPUT_CHARS = "16000"
+# AGY_MCP_MAX_OUTPUT_CHARS = "16000"
 # Optional default model slug discovered via `antigravity_models`:
 # AGY_MCP_DEFAULT_MODEL = "a-slug-returned-by-antigravity_models"
 # Remove this entry when `agy` is available in Codex's PATH:
@@ -177,7 +177,7 @@ codex mcp add antigravity \
   --env "AGY_MCP_ALLOWED_ROOT=/absolute/path/to" \
   --env "AGY_MCP_MAX_CONCURRENT=4" \
   --env "AGY_MCP_MAX_OUTPUT_CHARS=16000" \
-  -- "/absolute/path/to/node" "/absolute/path/to/agy-mcp/dist/index.js"
+  -- "/absolute/path/to/node" "/absolute/path/to/agy-orch-mcp/dist/index.js"
 ```
 
 Remember to add `startup_timeout_sec = 20` and `tool_timeout_sec = 3660` to the resulting entry in `config.toml`.

@@ -12,7 +12,7 @@
 
 1. **Host Orchestrator**:
    - Claude Code serves as the frontier host orchestrator.
-   - Delegate repository investigations, external web search, code implementation, tests, and fixes to Antigravity CLI via `agy-mcp` tools (`antigravity_run`, `antigravity_continue`).
+   - Delegate repository investigations, external web search, code implementation, tests, and fixes to Antigravity CLI via `agy-orch-mcp` tools (`antigravity_run`, `antigravity_continue`).
    - Retain host context for planning, task dispatching, and diff review.
 
 2. **Delegation Protocol**:

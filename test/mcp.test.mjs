@@ -40,7 +40,7 @@ function clientPair(extraEnv = {}, options = {}) {
     env,
   });
   const client = new Client(
-    { name: "agy-mcp-integration-test", version: "1.0.0" },
+    { name: "agy-orch-mcp-integration-test", version: "1.0.0" },
     options,
   );
   return { client, transport };
@@ -93,7 +93,7 @@ test("legacy and modern MCP negotiation expose all three tools", async (t) => {
   );
   assert.ok(
     legacyInstructions?.includes(
-      "without recursively invoking agy-mcp or delegating back",
+      "without recursively invoking agy-orch-mcp or delegating back",
     ),
   );
   const legacyToolList = (await legacy.client.listTools()).tools;
@@ -123,7 +123,7 @@ test("legacy and modern MCP negotiation expose all three tools", async (t) => {
   );
   assert.ok(
     modernInstructions?.includes(
-      "without recursively invoking agy-mcp or delegating back",
+      "without recursively invoking agy-orch-mcp or delegating back",
     ),
   );
   const modernTools = (await modern.client.listTools()).tools
@@ -291,7 +291,7 @@ test(
   "MCP runs and distinct continuations overlap with separate results and progress",
   { timeout: 10_000 },
   async (t) => {
-    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-mcp-parallel-"));
+    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-orch-mcp-parallel-"));
     const pair = await connected({ AGY_MCP_MAX_CONCURRENT: "2" });
     t.after(async () => {
       await closePair(pair);
@@ -372,7 +372,7 @@ test(
   "client cancellation stops only the selected agy subprocess",
   { timeout: 8_000 },
   async (t) => {
-    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-mcp-cancel-"));
+    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-orch-mcp-cancel-"));
     const pidFile = path.join(temp, "pid");
     const pair = await connected({ TEST_PID_FILE: pidFile });
     t.after(async () => {
@@ -420,7 +420,7 @@ test(
   "server stdin EOF shuts down every active subprocess",
   { timeout: 8_000 },
   async (t) => {
-    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-mcp-eof-"));
+    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-orch-mcp-eof-"));
     const pair = await connected();
     t.after(async () => {
       await closePair(pair);

@@ -15,7 +15,7 @@ const text = (max: number) =>
     .refine((value) => !value.includes("\0"), "NUL characters are not allowed");
 
 const policy =
-  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-mcp or delegating back.";
+  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-orch-mcp or delegating back.";
 
 const commonInput = {
   prompt: text(32_000)
@@ -69,7 +69,7 @@ const commonInput = {
 
 export function createServer(config: Config, runner: ProcessRunner): McpServer {
   const server = new McpServer(
-    { name: "agy-mcp", version },
+    { name: "agy-orch-mcp", version },
     { instructions: policy },
   );
 

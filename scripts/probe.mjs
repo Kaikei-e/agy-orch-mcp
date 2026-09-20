@@ -46,9 +46,9 @@ const transport = new StdioClientTransport({
     AGY_MCP_DEFAULT_WORKSPACE: workspace,
   },
 });
-const client = new Client({ name: "agy-mcp-probe", version: "0.1.0" });
+const client = new Client({ name: "agy-orch-mcp-probe", version: "0.1.0" });
 transport.stderr?.on("data", () => {});
-const memoryToken = `agy-mcp-${Math.random().toString(36).slice(2, 10)}`;
+const memoryToken = `agy-orch-mcp-${Math.random().toString(36).slice(2, 10)}`;
 
 try {
   await client.connect(transport);
@@ -126,7 +126,7 @@ try {
   );
 } catch (error) {
   process.stderr.write(
-    `agy-mcp probe failed: ${error instanceof Error ? error.message : String(error)}\n`,
+    `agy-orch-mcp probe failed: ${error instanceof Error ? error.message : String(error)}\n`,
   );
   process.exitCode = 1;
 } finally {

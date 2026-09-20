@@ -6,7 +6,7 @@
 
 [mcp_servers.antigravity]
 command = "/absolute/path/to/node"
-args = ["/absolute/path/to/agy-mcp/dist/index.js"]
+args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 startup_timeout_sec = 20
 tool_timeout_sec = 3660
 

@@ -1,14 +1,14 @@
 {
-  "name": "agy-mcp",
+  "name": "agy-orch-mcp",
   "version": "0.1.0",
   "description": "A local MCP bridge for delegating tasks to Google Antigravity CLI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Kaikei-e/agy-mcp.git"
+    "url": "git+https://github.com/Kaikei-e/agy-orch-mcp.git"
   },
-  "homepage": "https://github.com/Kaikei-e/agy-mcp#readme",
-  "bugs": "https://github.com/Kaikei-e/agy-mcp/issues",
+  "homepage": "https://github.com/Kaikei-e/agy-orch-mcp#readme",
+  "bugs": "https://github.com/Kaikei-e/agy-orch-mcp/issues",
   "keywords": [
     "mcp",
     "antigravity",
@@ -19,7 +19,7 @@
   "packageManager": "pnpm@10.18.1",
   "type": "module",
   "bin": {
-    "agy-mcp": "dist/index.js"
+    "agy-orch-mcp": "dist/index.js"
   },
   "files": [
     "dist",

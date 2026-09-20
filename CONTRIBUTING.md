@@ -1,4 +1,4 @@
-# Contributing to agy-mcp
+# Contributing to agy-orch-mcp
 
 Thanks for improving the project. Small, focused pull requests are easiest to review.
 

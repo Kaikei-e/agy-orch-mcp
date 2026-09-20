@@ -2,7 +2,7 @@
   "mcpServers": {
     "antigravity": {
       "command": "node",
-      "args": ["/absolute/path/to/agy-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/agy-orch-mcp/dist/index.js"],
       "env": {
         "AGY_MCP_DEFAULT_WORKSPACE": "/absolute/path/to/your/workspace",
         "AGY_MCP_ALLOWED_ROOT": "/absolute/path/to/your",
