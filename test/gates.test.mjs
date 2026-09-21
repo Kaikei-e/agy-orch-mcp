@@ -97,6 +97,41 @@ test("Gate modules", async (t) => {
     await fs.unlink(scriptPath);
   });
 
+  await t.test(
+    "GateRunner resolves binaries via PATH even when allowedEnvKeys does not list PATH",
+    async () => {
+      const customBinDir = await fs.mkdtemp(
+        path.join(fixturesDir, "custom-bin-"),
+      );
+      const toolName = `custom-gate-tool-${Date.now()}`;
+      const toolScript = path.join(customBinDir, toolName);
+      await fs.writeFile(toolScript, "#!/bin/sh\necho custom-gate-ok\n", {
+        mode: 0o755,
+      });
+
+      const origPath = process.env.PATH;
+      process.env.PATH = `${customBinDir}${path.delimiter}${origPath ?? ""}`;
+
+      try {
+        const runner = new GateRunner({
+          allowedExecutables: [toolName],
+          deniedExecutables: [],
+          allowedEnvKeys: [],
+          maxOutputBytes: 1024 * 1024,
+        });
+
+        const res = await runner.runGate([toolName], fixturesDir, 5000);
+        assert.strictEqual(res.exitCode, 0);
+        assert.ok(res.stdout.includes("custom-gate-ok"));
+        assert.strictEqual(res.failure, undefined);
+      } finally {
+        if (origPath !== undefined) process.env.PATH = origPath;
+        else delete process.env.PATH;
+        await fs.rm(customBinDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   await t.test("Parsers", () => {
     const tap = new NodeTapParser();
     const tapRes = tap.parse("not ok 1 - test failed", "");

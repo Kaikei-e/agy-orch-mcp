@@ -91,6 +91,20 @@ export class GateRunner {
     }
 
     const env: Record<string, string> = { NO_COLOR: "1" };
+    if (process.env.PATH !== undefined) {
+      env.PATH = process.env.PATH;
+    }
+    if (process.platform === "win32") {
+      if (process.env.Path !== undefined) {
+        env.Path = process.env.Path;
+      }
+      if (process.env.SYSTEMROOT !== undefined) {
+        env.SYSTEMROOT = process.env.SYSTEMROOT;
+      }
+      if (process.env.SystemRoot !== undefined) {
+        env.SystemRoot = process.env.SystemRoot;
+      }
+    }
     for (const key of this.options.allowedEnvKeys) {
       if (process.env[key] !== undefined) {
         env[key] = process.env[key]!;

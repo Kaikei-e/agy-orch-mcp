@@ -11,6 +11,7 @@ import {
   lstatSync,
   statSync,
   unlinkSync,
+  realpathSync,
 } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
@@ -290,14 +291,22 @@ export class ArtifactStore {
       mkdirSync(runDir, { recursive: true, mode: 0o700 });
     }
 
+    const canonicalRunDir = realpathSync(runDir);
+
     // Use resolveSafePath for symlink exfiltration protection
-    const targetPath = resolveSafePath(runDir, options.relativePath, {
+    const targetPath = resolveSafePath(canonicalRunDir, options.relativePath, {
       mustExist: false,
     });
 
+    if (existsSync(targetPath) && lstatSync(targetPath).isSymbolicLink()) {
+      throw new Error(
+        `Symlink exfiltration attempt in artifact path: ${options.relativePath}`,
+      );
+    }
+
     // Extra symlink checks on parents for directory traversal protection inside runDir
     let current = path.dirname(targetPath);
-    while (current !== runDir && current.startsWith(runDir)) {
+    while (current !== canonicalRunDir && current.startsWith(canonicalRunDir)) {
       if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
         throw new Error(
           `Symlink exfiltration attempt in artifact path: ${options.relativePath}`,

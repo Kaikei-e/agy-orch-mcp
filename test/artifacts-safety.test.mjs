@@ -37,6 +37,38 @@ test("ArtifactStore rejects symlink exfiltration", (t) => {
   }, /Symlink exfiltration attempt/);
 });
 
+test("ArtifactStore rejects symlink exfiltration when storage path has symlink ancestors", (t) => {
+  const realBase = mkdtempSync(path.join(os.tmpdir(), "agy-test-store-real-"));
+  const symBase = path.join(os.tmpdir(), `agy-test-store-sym-${Date.now()}`);
+  symlinkSync(realBase, symBase);
+
+  t.after(() => {
+    try {
+      rmSync(symBase, { force: true });
+    } catch {}
+    try {
+      rmSync(realBase, { recursive: true, force: true });
+    } catch {}
+  });
+
+  const store = new ArtifactStore(symBase, path.join(symBase, "storage"));
+  const runId = "test-run-symlink-ancestor";
+  store.initRun(runId, symBase);
+
+  const runDir = store.getRunDir(runId);
+  const maliciousLink = path.join(runDir, "malicious_link");
+  symlinkSync(os.tmpdir(), maliciousLink);
+
+  assert.throws(() => {
+    store.saveArtifact({
+      runId,
+      kind: "stdout",
+      relativePath: "malicious_link/sneaky.log",
+      content: "you got hacked",
+    });
+  }, /Symlink exfiltration attempt/);
+});
+
 test("ArtifactStore performs exact safe UTF-8 slicing", (t) => {
   const limits = { ...DEFAULT_SERVER_LIMITS, maxFetchBytes: 10 };
   const { store, tmpDir } = setupStore(t, limits);
