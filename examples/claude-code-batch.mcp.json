@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agy_orch": {
+      "command": "node",
+      "args": ["/absolute/path/to/agy-orch-mcp/dist/index.js"],
+      "env": {
+        "AGY_MCP_ENABLE_BATCH": "true",
+        "AGY_MCP_TOOL_SURFACE": "batch"
+      }
+    }
+  }
+}

@@ -19,13 +19,15 @@ For detailed architecture, design rationale, and operational planning, see [docs
 
 ## What it provides
 
-| MCP tool               | Purpose                                                                                                            |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `antigravity_run`      | Starts a new Antigravity conversation and returns its result and, when supplied by the CLI, its `conversation_id`. |
-| `antigravity_continue` | Continues a conversation by ID. Without an ID, it asks `agy` to continue its latest conversation.                  |
-| `antigravity_models`   | Runs `agy models` and returns the CLI output. It does not start a model turn, but it may contact Antigravity.      |
+| MCP tool               | Availability | Purpose                                                                                                                    |
+| ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `antigravity_run`      | Default      | Starts a new Antigravity conversation and returns its result and, when supplied by the CLI, its `conversation_id`.         |
+| `antigravity_continue` | Default      | Continues a conversation by ID. Without an ID, it asks `agy` to continue its latest conversation.                          |
+| `antigravity_models`   | Default      | Runs `agy models` and returns the CLI output. It does not start a model turn, but it may contact Antigravity.              |
+| `antigravity_batch`    | Opt-in       | Executes a multi-task DAG with validation gates in isolated Git worktrees, producing an artifact-only `final.patch`.       |
+| `antigravity_fetch`    | Opt-in       | Retrieves safe slices of artifacts (stdout, stderr, patches, digest, manifest, request, plan, events) by logical selector. |
 
-`run` and `continue` accept a prompt, an absolute workspace, an optional model and effort, a mode (`plan` or `accept-edits`), an autonomy level, and a hard timeout.
+`run` and `continue` accept a prompt, an absolute workspace, an optional model and effort, a mode (`plan` or `accept-edits`), an autonomy level, and a hard timeout. Legacy tool defaults remain unchanged. Opt-in tools (`antigravity_batch` and `antigravity_fetch`) require `AGY_MCP_ENABLE_BATCH=true` and `AGY_MCP_ENABLE_FETCH=true` (or setting `AGY_MCP_TOOL_SURFACE=batch`).
 
 ### Model Selection & Precedence
 
@@ -67,6 +69,21 @@ When delegating tasks to `antigravity_run`, the host orchestrator should provide
   "timeout_seconds": 600
 }
 ```
+
+## Batch Orchestration (`antigravity_batch` & `antigravity_fetch`)
+
+When opted in via `AGY_MCP_ENABLE_BATCH=true` and `AGY_MCP_ENABLE_FETCH=true` (or `AGY_MCP_TOOL_SURFACE=batch`), the server provides advanced multi-task DAG batch orchestration:
+
+- **Isolated Worktrees & Artifact-Only Delivery**: Each task worker runs in an isolated Git worktree branched from the base revision. Validated patches are integrated in deterministic topological order and saved as an artifact (`final.patch`). The host working tree is **never directly modified**.
+- **Clean Workspace Requirement**: `workspace.dirty_policy` defaults to `"reject"` and requires a clean working repository. The `"snapshot"` policy is currently **unsupported and rejected**.
+- **Ownership vs. Reference Scope**: `task.owns` specifies the exact file paths/globs the worker has permission to edit (`owns ⊆ scope.include` and `owns ∩ scope.exclude = ∅`). `scope.include` defines broader read/reference visibility.
+- **Gate Command Execution**: `gate.command` requires an explicit argv array (`string[]`), never raw shell strings, preventing shell injection or unmonitored subshell expansion.
+- **Containment Model**: Worktree isolation, static path validation, and argv execution provide defense-in-depth application boundaries; they do **not** constitute an operating-system-level sandbox.
+- **Bounded Retries & Deadlines**: Batches enforce strict execution limits (`budget.max_worker_calls`, `max_repair_attempts`, `max_replans`, and `wall_time_ms`).
+- **Token Budget, Preflight Capacity & Dynamic Digest**: Output is summarized within `return.max_tokens` (default 1400) using deterministic progressive shedding accounting for the entire MCP envelope. Upfront preflight validation rejects impossible budgets before worker or worktree creation, preserving `CAPACITY_EXCEEDED` and recovery pointers. (Phase 6 semantic compression is optional and not implemented; real-world 20+20 host rollout benchmarks were not run).
+- **Safe Artifact Fetching & Raw Capture Fidelity**: `antigravity_fetch` retrieves full or sliced outputs using logical selectors (`task:<id>:stdout`, `task:<id>:stderr`, `task:<id>:patch`, `gate:<id>:stdout`, `gate:<id>:stderr`, `manifest`, `digest`, `request`, `plan`, `events`) or artifact IDs with cursor pagination (`byte_offset`). Physical CLI stream-json stdout and stderr are faithfully preserved in batch task artifacts for post-run recovery, while internal raw stdout is strictly omitted from legacy MCP tool outputs. Raw filesystem paths are rejected.
+- **Minimal Tool Surface (`AGY_MCP_TOOL_SURFACE=batch`)**: Suppresses legacy `antigravity_run`, `antigravity_continue`, and `antigravity_models` tools, publishing only `antigravity_batch` and `antigravity_fetch` to conserve host context tokens.
+- **Client Configuration Examples**: For batch profiles, consult [examples/codex-batch.toml](examples/codex-batch.toml) and [examples/claude-code-batch.mcp.json](examples/claude-code-batch.mcp.json).
 
 ## Parallel Calls, Timeouts, and Bounded Recovery
 
@@ -211,16 +228,22 @@ When introducing these templates to an existing project, **merge** the rules int
 
 ## Configuration Reference
 
-| Variable                      | Default                  | Meaning                                                                                    |
-| ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `AGY_MCP_BIN`                 | `agy`                    | CLI executable name, or an absolute or relative path to the executable.                    |
-| `AGY_MCP_DEFAULT_WORKSPACE`   | server current directory | Default workspace directory.                                                               |
-| `AGY_MCP_ALLOWED_ROOT`        | unset                    | Optional canonical root restricting permitted workspaces.                                  |
-| `AGY_MCP_DEFAULT_MODEL`       | unset                    | Optional default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > CLI. |
-| `AGY_MCP_MAX_CONCURRENT`      | `4`                      | Maximum simultaneous CLI child processes (1–32).                                           |
-| `AGY_MCP_MAX_OUTPUT_CHARS`    | `40000`                  | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).  |
-| `AGY_MCP_MAX_BUFFER_BYTES`    | `8388608`                | Maximum captured CLI stdout buffer per process before termination (1024–67108864).         |
-| `AGY_MCP_ALLOW_FULL_AUTONOMY` | `false`                  | Set to `true` to permit requests with `autonomy: "full"`.                                  |
+| Variable                      | Default                  | Meaning                                                                                     |
+| ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
+| `AGY_MCP_BIN`                 | `agy`                    | CLI executable name, or an absolute or relative path to the executable.                     |
+| `AGY_MCP_DEFAULT_WORKSPACE`   | server current directory | Default workspace directory.                                                                |
+| `AGY_MCP_ALLOWED_ROOT`        | unset                    | Optional canonical root restricting permitted workspaces.                                   |
+| `AGY_MCP_DEFAULT_MODEL`       | unset                    | Optional default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > CLI.  |
+| `AGY_MCP_FAST_MODEL`          | unset                    | Optional fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.             |
+| `AGY_MCP_REASONING_MODEL`     | unset                    | Optional reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.     |
+| `AGY_MCP_ENABLE_BATCH`        | `false`                  | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch) |
+| `AGY_MCP_ENABLE_FETCH`        | `false`                  | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch) |
+| `AGY_MCP_TOOL_SURFACE`        | `all`                    | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).    |
+| `AGY_MCP_MAX_CONCURRENT`      | `4`                      | Maximum simultaneous CLI child processes (1–32).                                            |
+| `AGY_MCP_MAX_OUTPUT_CHARS`    | `40000`                  | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).   |
+| `AGY_MCP_MAX_BUFFER_BYTES`    | `8388608`                | Maximum captured CLI stdout buffer per process before termination (1024–67108864).          |
+| `AGY_MCP_ALLOW_FULL_AUTONOMY` | `false`                  | Set to `true` to permit requests with `autonomy: "full"`.                                   |
+| `AGY_ORCH_STORAGE_DIR`        | unset                    | Optional directory for artifact store and telemetry (defaults to XDG state/cache path).     |
 
 ## Development
 
