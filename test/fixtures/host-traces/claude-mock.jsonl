@@ -1,0 +1,6 @@
+{"_synthetic": true, "_label": "SYNTHETIC FIXTURE — NOT FROM REAL HOST ROLLOUT", "request_id": "req_synth_claude_001", "type": "info"}
+{"_synthetic": true, "request_id": "req_synth_claude_001", "type": "compact_boundary"}
+{"_synthetic": true, "request_id": "req_synth_claude_001", "message": {"id": "msg_1", "usage": {"input_tokens": 100, "cache_creation_input_tokens": 500, "cache_read_input_tokens": 0, "output_tokens": 50}}}
+{"_synthetic": true, "request_id": "req_synth_claude_001", "message": {"id": "msg_1", "usage": {"input_tokens": 120, "cache_creation_input_tokens": 500, "cache_read_input_tokens": 0, "output_tokens": 80}}}
+{"_synthetic": true, "request_id": "req_synth_claude_001", "message": {"id": "msg_2", "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 600, "output_tokens": 30}}}
+{"_synthetic": true, "request_id": "req_synth_claude_002", "message": {"id": "msg_3", "usage": {"input_tokens": 50, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 200, "output_tokens": 10}}}

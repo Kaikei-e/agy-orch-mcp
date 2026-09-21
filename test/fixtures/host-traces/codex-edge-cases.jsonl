@@ -1,0 +1,5 @@
+{"_synthetic": true, "_label": "SYNTHETIC — malformed line test"}
+not valid json at all
+{"_synthetic": true, "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": -5, "cached_input_tokens": 10, "output_tokens": 0}}}}
+{"_synthetic": true, "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "cached_input_tokens": 200, "output_tokens": 10}}}}
+{"_synthetic": true, "request_id": "req_edge_1", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 50, "cached_input_tokens": 0, "output_tokens": 5}}}}

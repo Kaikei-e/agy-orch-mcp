@@ -1,0 +1,5 @@
+{"_synthetic": true, "_label": "SYNTHETIC FIXTURE — NOT FROM REAL HOST ROLLOUT", "type": "info", "message": "session start"}
+{"_synthetic": true, "request_id": "req_synth_codex_001", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 1500, "cached_input_tokens": 1000, "output_tokens": 100, "reasoning_output_tokens": 20}, "total_token_usage": {"input_tokens": 1500, "cached_input_tokens": 1000, "output_tokens": 100, "reasoning_output_tokens": 20}}}}
+{"_synthetic": true, "request_id": "req_synth_codex_001", "type": "compaction"}
+{"_synthetic": true, "request_id": "req_synth_codex_001", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 800, "cached_input_tokens": 700, "output_tokens": 50}, "total_token_usage": {"input_tokens": 2300, "cached_input_tokens": 1700, "output_tokens": 150, "reasoning_output_tokens": 20}}}}
+{"_synthetic": true, "request_id": "req_synth_codex_002", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 200, "cached_input_tokens": 0, "output_tokens": 30}}}}

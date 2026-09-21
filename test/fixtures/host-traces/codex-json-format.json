@@ -1,0 +1,21 @@
+[
+  {
+    "_synthetic": true,
+    "_label": "SYNTHETIC — JSON array format test",
+    "request_id": "req_json_1"
+  },
+  {
+    "_synthetic": true,
+    "request_id": "req_json_1",
+    "payload": {
+      "type": "token_count",
+      "info": {
+        "last_token_usage": {
+          "input_tokens": 300,
+          "cached_input_tokens": 100,
+          "output_tokens": 25
+        }
+      }
+    }
+  }
+]
