@@ -13,3 +13,15 @@ coverage/
 .mcp.json
 .codex/
 .claude/settings.local.json
+
+# Internal documentation
+docs/internal/
+
+# Test-generated fixture workspaces and scripts
+test/fixtures/workspace/
+test/fixtures/workspace_adv/
+test/fixtures/gates_adv/
+
+# Scratch migration scripts
+fix-*.mjs
+fix-*.js
