@@ -2,15 +2,27 @@ import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { validateModelSlug } from "./policy.js";
 
+import type { ServerLimits } from "./domain/limits.js";
+import { DEFAULT_SERVER_LIMITS } from "./domain/limits.js";
+
+export type ToolSurface = "all" | "batch";
+
 export interface Config {
   bin: string;
   defaultWorkspace: string;
   allowedRoot?: string;
   defaultModel?: string;
+  fastModel?: string;
+  reasoningModel?: string;
   maxOutputChars: number;
   maxBufferBytes: number;
   maxConcurrent: number;
   allowFullAutonomy: boolean;
+  storageDir?: string;
+  limits: ServerLimits;
+  enableFetch: boolean;
+  enableBatch: boolean;
+  toolSurface: ToolSurface;
 }
 
 function directory(value: string): string {
@@ -62,6 +74,43 @@ export function loadConfig(
   const full = env.AGY_MCP_ALLOW_FULL_AUTONOMY ?? "false";
   if (full !== "true" && full !== "false")
     throw new Error("AGY_MCP_ALLOW_FULL_AUTONOMY must be true or false");
+  const rawSurface = (
+    env.AGY_MCP_TOOL_SURFACE ??
+    env.AGY_MCP_TOOL_PROFILE ??
+    "all"
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    rawSurface !== "all" &&
+    rawSurface !== "batch" &&
+    rawSurface !== "compat"
+  ) {
+    throw new Error("AGY_MCP_TOOL_SURFACE must be 'all', 'compat', or 'batch'");
+  }
+  const toolSurface: ToolSurface = rawSurface === "batch" ? "batch" : "all";
+  const batchEnv = env.AGY_MCP_ENABLE_BATCH;
+  if (batchEnv !== undefined && batchEnv !== "true" && batchEnv !== "false") {
+    throw new Error("AGY_MCP_ENABLE_BATCH must be true or false");
+  }
+  const fetchEnv = env.AGY_MCP_ENABLE_FETCH;
+  if (fetchEnv !== undefined && fetchEnv !== "true" && fetchEnv !== "false") {
+    throw new Error("AGY_MCP_ENABLE_FETCH must be true or false");
+  }
+
+  const enableBatch =
+    batchEnv !== undefined ? batchEnv === "true" : toolSurface === "batch";
+  const enableFetch =
+    fetchEnv !== undefined ? fetchEnv === "true" : toolSurface === "batch";
+
+  if (toolSurface === "batch" && !enableBatch && !enableFetch) {
+    throw new Error(
+      "Contradictory configuration: AGY_MCP_TOOL_SURFACE 'batch' would publish neither tool when both batch and fetch are disabled",
+    );
+  }
+
+  const maxConcurrent = integer(env, "AGY_MCP_MAX_CONCURRENT", 4, 1, 32);
+
   const config: Config = {
     bin: bin.includes("/") || bin.includes("\\") ? path.resolve(cwd, bin) : bin,
     defaultWorkspace: directory(
@@ -74,6 +123,11 @@ export function loadConfig(
     defaultModel: validateModelSlug(
       env.AGY_MCP_DEFAULT_MODEL,
       "AGY_MCP_DEFAULT_MODEL",
+    ),
+    fastModel: validateModelSlug(env.AGY_MCP_FAST_MODEL, "AGY_MCP_FAST_MODEL"),
+    reasoningModel: validateModelSlug(
+      env.AGY_MCP_REASONING_MODEL,
+      "AGY_MCP_REASONING_MODEL",
     ),
     maxOutputChars: integer(
       env,
@@ -89,8 +143,22 @@ export function loadConfig(
       1_024,
       67_108_864,
     ),
-    maxConcurrent: integer(env, "AGY_MCP_MAX_CONCURRENT", 4, 1, 32),
+    maxConcurrent,
     allowFullAutonomy: full === "true",
+    storageDir:
+      env.AGY_ORCH_STORAGE_DIR && env.AGY_ORCH_STORAGE_DIR.trim()
+        ? path.resolve(cwd, env.AGY_ORCH_STORAGE_DIR)
+        : undefined,
+    limits: {
+      ...DEFAULT_SERVER_LIMITS,
+      maxParallelism: Math.min(
+        DEFAULT_SERVER_LIMITS.maxParallelism,
+        maxConcurrent,
+      ),
+    },
+    enableFetch,
+    enableBatch,
+    toolSurface,
   };
   resolveWorkspace(undefined, config);
   return config;

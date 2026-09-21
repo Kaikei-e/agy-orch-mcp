@@ -275,10 +275,15 @@ test(
     controller.abort();
     assert.equal((await pending).failure, "CANCELED");
     let state;
-    try {
-      state = readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1][0];
-    } catch {
-      state = "gone";
+    for (let i = 0; i < 50; i++) {
+      try {
+        state = readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1][0];
+        if (state === "Z" || state === "gone") break;
+      } catch {
+        state = "gone";
+        break;
+      }
+      await delay(20);
     }
     assert.ok(
       state === "Z" || state === "gone",

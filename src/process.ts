@@ -14,8 +14,10 @@ export interface ProcessOptions {
   cwd: string;
   timeoutMs: number;
   maxBufferBytes: number;
+  maxArtifactBytes?: number;
   signal?: AbortSignal;
   onStdout?: (chunk: string) => void;
+  onStderr?: (chunk: string) => void;
   lockKey?: string;
   exclusive?: boolean;
 }
@@ -35,7 +37,6 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
   if (!child.pid) return;
   try {
     if (process.platform === "win32") {
-      // Windows has no POSIX process groups. taskkill terminates descendants too.
       const killer = spawn(
         "taskkill",
         ["/pid", String(child.pid), "/T", "/F"],
@@ -52,7 +53,6 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-/** Bounded parallel CLIs, with optional resource locks or exclusive execution. */
 export class ProcessRunner {
   private readonly active = new Set<{
     stop: () => void;
@@ -131,12 +131,28 @@ export class ProcessRunner {
       let error: string | undefined;
       let finished = false;
       let killTimer: NodeJS.Timeout | undefined;
+      let forceCloseTimer: NodeJS.Timeout | undefined;
+      let exitCodeReceived: number | null = null;
+      const pid = child.pid;
+
       const stop = (reason: ProcessResult["failure"], message: string) => {
         if (finished || failure) return;
         failure = reason;
         error = message;
         killTree(child, "SIGTERM");
-        killTimer = setTimeout(() => killTree(child, "SIGKILL"), 1_000);
+        killTimer = setTimeout(() => {
+          killTree(child, "SIGKILL");
+          // If stdio still keeps the process from closing, force destroy streams
+          forceCloseTimer = setTimeout(() => {
+            try {
+              child.stdout?.destroy();
+            } catch {}
+            try {
+              child.stderr?.destroy();
+            } catch {}
+            finish(exitCodeReceived ?? null);
+          }, 500);
+        }, 1_000);
       };
       cancel = () => stop("CANCELED", "Request canceled");
       const timeout = setTimeout(
@@ -149,13 +165,24 @@ export class ProcessRunner {
         finished = true;
         clearTimeout(timeout);
         clearTimeout(killTimer);
+        clearTimeout(forceCloseTimer);
         options.signal?.removeEventListener("abort", cancel);
-        // A CLI may exit without reaping a tool it started.
-        killTree(child, "SIGKILL");
-        resolve({ stdout, stderr, exitCode, failure, error });
+        // Only reap if we terminated with failure/stop
+        if (failure && pid) {
+          killTree(child, "SIGKILL");
+        }
+        resolve({
+          stdout,
+          stderr,
+          exitCode: exitCode ?? exitCodeReceived,
+          failure,
+          error,
+        });
       };
+
       child.stdout!.setEncoding("utf8");
       child.stderr!.setEncoding("utf8");
+
       child.stdout!.on("data", (chunk: string) => {
         if (failure) return;
         bytes += Buffer.byteLength(chunk);
@@ -167,15 +194,38 @@ export class ProcessRunner {
           return;
         }
         stdout += chunk;
+        // Pass to raw handler for artifact capture
         options.onStdout?.(chunk);
       });
+
       child.stderr!.on("data", (chunk: string) => {
+        // Pass to raw handler for artifact capture before truncation
+        options.onStderr?.(chunk);
         stderr = (stderr + chunk).slice(-4_000);
       });
+
       child.on("error", (cause) => {
         failure = "SPAWN_ERROR";
         error = `Could not start ${options.bin}: ${cause.message}. Install agy or set AGY_MCP_BIN to its executable path.`;
         finish(null);
+      });
+      child.on("exit", (code) => {
+        exitCodeReceived = code;
+        if (failure) {
+          // Parent exited during stop/cleanup flow: immediately reap any lingering grandchildren
+          if (pid) killTree(child, "SIGKILL");
+        } else {
+          // Normal exit: wait briefly for close event, force finish if stdio leaked
+          forceCloseTimer = setTimeout(() => {
+            try {
+              child.stdout?.destroy();
+            } catch {}
+            try {
+              child.stderr?.destroy();
+            } catch {}
+            finish(code);
+          }, 500);
+        }
       });
       child.on("close", finish);
       options.signal?.addEventListener("abort", cancel, { once: true });

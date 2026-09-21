@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
 import { ProcessRunner } from "./process.js";
+import type { ArtifactStore } from "./artifacts/store.js";
 
 export interface RunOptions {
   prompt: string;
@@ -13,6 +15,10 @@ export interface RunOptions {
   continueLatest?: boolean;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  returnMode?: "raw" | "digest";
+  traceId?: string;
+  runId?: string;
+  store?: ArtifactStore;
 }
 
 export interface RunResult {
@@ -26,6 +32,20 @@ export interface RunResult {
   usage?: Record<string, unknown>;
   durationSec?: number;
   stderr?: string;
+  rawStdout?: string;
+  runId?: string;
+  traceId?: string;
+  recoveryPointer?: {
+    run_id: string;
+    manifest_artifact_id: string;
+    digest_artifact_id: string;
+  };
+  artifacts?: Array<{
+    id: string;
+    kind: string;
+    byte_size: number;
+    sha256: string;
+  }>;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -37,7 +57,6 @@ function record(value: unknown): Record<string, unknown> | undefined {
 const string = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
-/** Accept only terminal envelopes; an init/log object must never hide a result. */
 export function parseAgyOutput(
   stdout: string,
 ): Omit<RunResult, "ok" | "exitCode"> & { parsed: boolean } {
@@ -139,21 +158,46 @@ export async function runAgy(
     ...options,
     model: options.model ?? config.defaultModel,
   };
+
+  let runId = resolvedOptions.runId;
+  const traceId = resolvedOptions.traceId ?? `tr_${randomUUID().slice(0, 8)}`;
+
+  let recoveryPointer: RunResult["recoveryPointer"] = undefined;
+  let artifacts: RunResult["artifacts"] = undefined;
+
+  const wantsStore =
+    resolvedOptions.store &&
+    (resolvedOptions.returnMode === "digest" || resolvedOptions.runId);
+
+  if (wantsStore) {
+    runId ??= `run_${randomUUID().slice(0, 12)}`;
+    try {
+      resolvedOptions.store!.initRun(runId, resolvedOptions.workspace);
+    } catch {
+      // ignore
+    }
+  }
+
   let pending = "";
   let lastProgress = 0;
+
+  const rawStdout: string[] = [];
+  const rawStderr: string[] = [];
+
   const processResult = await runner.run({
     bin: config.bin,
     args: buildArgs(resolvedOptions),
     cwd: resolvedOptions.workspace,
     timeoutMs: (resolvedOptions.timeoutSec ?? 300) * 1_000,
     maxBufferBytes: config.maxBufferBytes,
+    maxArtifactBytes: 50 * 1024 * 1024,
     signal: resolvedOptions.signal,
-    // UUIDs are case-insensitive. Only implicit continuation needs exclusivity.
     lockKey: resolvedOptions.conversationId?.toLowerCase(),
     exclusive: Boolean(
       resolvedOptions.continueLatest && !resolvedOptions.conversationId,
     ),
     onStdout: (chunk) => {
+      if (wantsStore) rawStdout.push(chunk);
       pending += chunk;
       let newline: number;
       while ((newline = pending.indexOf("\n")) >= 0) {
@@ -166,15 +210,18 @@ export async function runAgy(
             Date.now() - lastProgress >= 1_000
           ) {
             lastProgress = Date.now();
-            // Avoid forwarding prompts, tool arguments, or model reasoning in progress.
             resolvedOptions.onProgress?.("Antigravity is processing the task");
           }
         } catch {
-          /* The final parser reports unrecognized output. */
+          /* ignore */
         }
       }
     },
+    onStderr: (chunk) => {
+      if (wantsStore) rawStderr.push(chunk);
+    },
   });
+
   const parsed = parseAgyOutput(processResult.stdout);
   let status = processResult.failure ?? parsed.status;
   let error = processResult.error ?? parsed.error;
@@ -198,10 +245,87 @@ export async function runAgy(
       error ??= `agy exited with code ${processResult.exitCode ?? "unknown"}`;
     if (status !== "SUCCESS") error ??= `agy ended with status ${status}`;
   }
+
+  if (wantsStore && runId) {
+    try {
+      const stdoutArt = resolvedOptions.store!.saveArtifact({
+        runId,
+        kind: "stdout",
+        relativePath: "stdout.log",
+        content: rawStdout.join(""),
+      });
+      const stderrArt = resolvedOptions.store!.saveArtifact({
+        runId,
+        kind: "stderr",
+        relativePath: "stderr.log",
+        content: rawStderr.join(""),
+      });
+      artifacts = [
+        {
+          id: stdoutArt.id,
+          kind: stdoutArt.kind,
+          byte_size: stdoutArt.byte_size,
+          sha256: stdoutArt.sha256,
+        },
+        {
+          id: stderrArt.id,
+          kind: stderrArt.kind,
+          byte_size: stderrArt.byte_size,
+          sha256: stderrArt.sha256,
+        },
+      ];
+
+      const manifest = resolvedOptions.store!.loadManifest(runId);
+      if (manifest) {
+        manifest.status = status === "SUCCESS" ? "succeeded" : "failed";
+        manifest.updated_at = new Date().toISOString();
+        resolvedOptions.store!.saveManifest(manifest);
+      }
+
+      recoveryPointer = {
+        run_id: runId,
+        manifest_artifact_id: "manifest",
+        digest_artifact_id: stdoutArt.id,
+      };
+    } catch {
+      // ignore
+    }
+  }
+
+  let finalResponse = parsed.response;
+  if (resolvedOptions.returnMode === "digest" && runId) {
+    const compactSummary =
+      parsed.response.length > 500
+        ? parsed.response.slice(0, 480) + "... [truncated in digest]"
+        : parsed.response;
+
+    let structuredContent;
+    try {
+      structuredContent = parsed.response
+        ? JSON.parse(parsed.response)
+        : undefined;
+    } catch {
+      structuredContent = undefined;
+    }
+
+    finalResponse = JSON.stringify({
+      schema_version: "1",
+      run_id: runId,
+      trace_id: traceId,
+      status: status === "SUCCESS" ? "succeeded" : "failed",
+      summary: compactSummary || status,
+      structured: structuredContent,
+      raw_output_bytes: Buffer.byteLength(processResult.stdout, "utf8"),
+      recovery_pointer: recoveryPointer,
+      artifacts,
+    });
+  }
+
   return {
     ok: processResult.exitCode === 0 && status === "SUCCESS" && !error,
     status,
-    response: parsed.response,
+    response: finalResponse,
+    rawStdout: processResult.stdout,
     error,
     exitCode: processResult.exitCode,
     conversationId: parsed.conversationId,
@@ -209,6 +333,10 @@ export async function runAgy(
     usage: parsed.usage,
     durationSec: parsed.durationSec,
     stderr: processResult.stderr,
+    runId,
+    traceId,
+    recoveryPointer,
+    artifacts,
   };
 }
 

@@ -19,6 +19,12 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
       : {}),
     ...(result.usage ? { usage: result.usage } : {}),
     ...(!result.ok && result.stderr ? { stderr: result.stderr } : {}),
+    ...(result.runId ? { run_id: result.runId } : {}),
+    ...(result.traceId ? { trace_id: result.traceId } : {}),
+    ...(result.recoveryPointer
+      ? { recovery_pointer: result.recoveryPointer }
+      : {}),
+    ...(result.artifacts ? { artifacts: result.artifacts } : {}),
     response: result.response,
     truncated: Boolean(result.error && result.error.length > 2_000),
   };

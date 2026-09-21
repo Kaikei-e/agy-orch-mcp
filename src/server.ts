@@ -6,6 +6,11 @@ import { ProcessRunner } from "./process.js";
 import { toToolResult } from "./result.js";
 import { version } from "./version.js";
 import { validateModelSlug } from "./policy.js";
+import { ArtifactStore } from "./artifacts/store.js";
+import { enforceRetentionAndRecovery } from "./artifacts/retention.js";
+import { executeFetch } from "./tools/antigravity-fetch.js";
+import { executeBatchTool } from "./tools/antigravity-batch.js";
+import { batchRequestSchema, fetchRequestSchema } from "./validation/schema.js";
 
 const text = (max: number) =>
   z
@@ -65,6 +70,12 @@ const commonInput = {
     .describe(
       "Hard deadline in seconds. Configure the MCP client's timeout slightly longer.",
     ),
+  return_mode: z
+    .enum(["raw", "digest"])
+    .default("raw")
+    .describe(
+      "raw returns standard text response; digest preserves raw stdout/stderr in artifact store and returns compact recovery pointers.",
+    ),
 };
 
 export function createServer(config: Config, runner: ProcessRunner): McpServer {
@@ -72,6 +83,17 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     { name: "agy-orch-mcp", version },
     { instructions: policy },
   );
+
+  const store = new ArtifactStore(
+    config.defaultWorkspace,
+    config.storageDir,
+    config.limits,
+  );
+  try {
+    enforceRetentionAndRecovery(store);
+  } catch {
+    // Non-fatal retention failure on startup
+  }
 
   async function execute(
     args: z.infer<z.ZodObject<typeof commonInput>> & {
@@ -124,6 +146,8 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         continueLatest: resume && !args.conversation_id,
         signal: context.mcpReq.signal,
         onProgress: notify,
+        returnMode: args.return_mode,
+        store,
       };
       return toToolResult(
         await runAgy(options, config, runner),
@@ -146,55 +170,122 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     }
   }
 
+  let activeBatchCalls = 0;
+
   const annotations = {
     readOnlyHint: false,
     destructiveHint: true,
     idempotentHint: false,
     openWorldHint: true,
   };
-  server.registerTool(
-    "antigravity_run",
-    {
-      title: "Run Antigravity",
-      description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Parallel calls share workspace files, Antigravity account and quota.`,
-      inputSchema: z.object(commonInput).strict(),
-      annotations,
-    },
-    (args, context) => execute(args, context, false),
-  );
 
-  server.registerTool(
-    "antigravity_continue",
-    {
-      title: "Continue Antigravity",
-      description: `Policy: ${policy} Follow up in an existing Antigravity conversation. Different explicit conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Without an ID, agy resumes its most recent conversation and requires exclusive access to this server, otherwise BUSY is returned. Other CLI sessions may change the latest conversation. Use the same workspace as the original turn.`,
-      inputSchema: z
-        .object({ ...commonInput, conversation_id: z.uuid().optional() })
-        .strict(),
-      annotations,
-    },
-    (args, context) => execute(args, context, true),
-  );
-
-  server.registerTool(
-    "antigravity_models",
-    {
-      title: "List Antigravity models",
-      description:
-        "List available model slugs and display names using agy models. Does not start a model turn; may contact the Antigravity service.",
-      inputSchema: z.object({}).strict(),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
+  if (config.toolSurface !== "batch") {
+    server.registerTool(
+      "antigravity_run",
+      {
+        title: "Run Antigravity",
+        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Parallel calls share workspace files, Antigravity account and quota.`,
+        inputSchema: z.object(commonInput).strict(),
+        annotations,
       },
-    },
-    async (_args, context) =>
-      toToolResult(
-        await listModels(config, runner, context.mcpReq.signal),
-        config.maxOutputChars,
-      ),
-  );
+      (args, context) => execute(args, context, false),
+    );
+
+    server.registerTool(
+      "antigravity_continue",
+      {
+        title: "Continue Antigravity",
+        description: `Policy: ${policy} Follow up in an existing Antigravity conversation. Different explicit conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Without an ID, agy resumes its most recent conversation and requires exclusive access to this server, otherwise BUSY is returned. Other CLI sessions may change the latest conversation. Use the same workspace as the original turn.`,
+        inputSchema: z
+          .object({ ...commonInput, conversation_id: z.uuid().optional() })
+          .strict(),
+        annotations,
+      },
+      (args, context) => execute(args, context, true),
+    );
+
+    server.registerTool(
+      "antigravity_models",
+      {
+        title: "List Antigravity models",
+        description:
+          "List available model slugs and display names using agy models. Does not start a model turn; may contact the Antigravity service.",
+        inputSchema: z.object({}).strict(),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async (_args, context) =>
+        toToolResult(
+          await listModels(config, runner, context.mcpReq.signal),
+          config.maxOutputChars,
+        ),
+    );
+  }
+
+  if (config.enableFetch) {
+    server.registerTool(
+      "antigravity_fetch",
+      {
+        title: "Fetch Antigravity artifact",
+        description:
+          "Fetch a selective slice of an artifact from a prior run by artifact_id or logical selector (e.g. task:<id>:stdout, task:<id>:stderr, gate:<id>:stdout, manifest, digest). Never accepts raw file paths.",
+        inputSchema: fetchRequestSchema,
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      (args) => executeFetch(args, store),
+    );
+  }
+
+  if (config.enableBatch) {
+    server.registerTool(
+      "antigravity_batch",
+      {
+        title: "Execute Antigravity task DAG batch",
+        description:
+          "Execute a directed acyclic graph (DAG) of isolated tasks and verification gates with bounded retry, producing structured digests and artifacts.",
+        inputSchema: batchRequestSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+      },
+      async (args, context) => {
+        if (activeBatchCalls >= config.maxConcurrent) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `[BUSY] All ${config.maxConcurrent} agy slots are in use. Wait for active calls to finish or raise AGY_MCP_MAX_CONCURRENT.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        activeBatchCalls++;
+        try {
+          return await executeBatchTool(args, {
+            store,
+            config,
+            runner,
+            signal: context.mcpReq.signal,
+          });
+        } finally {
+          activeBatchCalls--;
+        }
+      },
+    );
+  }
+
   return server;
 }
