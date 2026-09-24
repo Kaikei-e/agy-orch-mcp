@@ -177,6 +177,33 @@ test("MCP discovery: AGY_MCP_ENABLE_BATCH=true adds antigravity_batch while main
   ]);
 });
 
+test("MCP discovery: antigravity_batch tool description publishes effective limits from config", async (t) => {
+  const pair = createTestClient({
+    AGY_MCP_ENABLE_BATCH: "true",
+    AGY_MCP_MAX_CONCURRENT: "8",
+  });
+  t.after(() => closeClient(pair));
+  await pair.client.connect(pair.transport);
+
+  const list = await pair.client.listTools();
+  const batchTool = list.tools.find(
+    (tool) => tool.name === "antigravity_batch",
+  );
+  assert.ok(batchTool, "antigravity_batch tool must be present");
+
+  const desc = batchTool.description ?? "";
+  assert.match(desc, /up to 20 tasks/);
+  assert.match(desc, /10 gates/);
+  assert.match(desc, /8 parallel tasks/); // scaled to min(16, maxConcurrent=8)
+  assert.match(desc, /50 worker calls/);
+  assert.match(desc, /7200000ms/);
+  assert.match(desc, /clamped/);
+  assert.match(desc, /clean git tree/);
+  assert.match(desc, /scope\.include/);
+  assert.match(desc, /isolated git worktree/);
+  assert.match(desc, /final\.patch/);
+});
+
 test("MCP discovery: AGY_MCP_TOOL_SURFACE=batch exposes minimal batch and fetch surface only", async (t) => {
   const pair = createTestClient({ AGY_MCP_TOOL_SURFACE: "batch" });
   t.after(() => closeClient(pair));
@@ -544,5 +571,57 @@ test("MCP call: strict success contract via fake CLI, 2 dependent tasks, and arg
     gitStatus,
     "",
     "User original repository status must remain clean",
+  );
+});
+
+test("MCP call: batch tool emits progress notifications when progressToken is supplied", async (t) => {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), "agy-git-progress-repo-"));
+  const baseRev = initGitRepo(repoDir);
+
+  const pair = createTestClient({
+    AGY_MCP_ENABLE_BATCH: "true",
+    AGY_MCP_DEFAULT_WORKSPACE: repoDir,
+    AGY_MCP_ALLOWED_ROOT: repoDir,
+  });
+
+  t.after(() => {
+    closeClient(pair);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  await pair.client.connect(pair.transport);
+
+  const progress = [];
+  const result = await pair.client.callTool(
+    {
+      name: "antigravity_batch",
+      arguments: {
+        schema_version: "1",
+        workspace: { root: repoDir, base_revision: baseRev },
+        tasks: [
+          {
+            id: "task-1",
+            objective: "Task 1",
+            scope: { include: ["src/**"] },
+            owns: ["src/index.js"],
+          },
+        ],
+      },
+    },
+    { onprogress: (notification) => progress.push(notification) },
+  );
+
+  assert.equal(result.isError, false);
+  assert.ok(
+    progress.length > 0,
+    "Progress notifications must be emitted for batch call with progressToken",
+  );
+  assert.ok(
+    progress.some(
+      (item) => typeof item.message === "string" && item.message.length > 0,
+    ),
+    "At least one progress notification must have a non-empty message",
   );
 });

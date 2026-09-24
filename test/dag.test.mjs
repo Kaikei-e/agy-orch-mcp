@@ -273,7 +273,7 @@ test("validateBatchRequest enforces owns is strictly contained within scope.incl
   });
 });
 
-test("validateBatchRequest enforces server limits on tasks and budget", () => {
+test("validateBatchRequest enforces server limits on task/gate counts and clamps budget", () => {
   const customLimits = {
     maxTasks: 2,
     maxGates: 1,
@@ -315,47 +315,146 @@ test("validateBatchRequest enforces server limits on tasks and budget", () => {
     );
   }, /Task count \(3\) exceeds server limit \(2\)/);
 
-  // Exceeds max_worker_calls
-  assert.throws(() => {
-    validateBatchRequest(
-      {
-        schema_version: "1",
-        workspace: { root: "/tmp" },
-        tasks: [
-          {
-            id: "t1",
-            objective: "1",
-            scope: { include: ["src/**"] },
-            owns: ["src/a.ts"],
-          },
-        ],
-        budget: {
-          max_worker_calls: 10,
+  // Budget exceeding limits is clamped, not rejected
+  const clampedReq = validateBatchRequest(
+    {
+      schema_version: "1",
+      workspace: { root: "/tmp" },
+      tasks: [
+        {
+          id: "t1",
+          objective: "1",
+          scope: { include: ["src/**"] },
+          owns: ["src/a.ts"],
         },
+      ],
+      budget: {
+        max_worker_calls: 10,
+        max_parallelism: 8,
       },
-      customLimits,
-    );
-  }, /Requested max_worker_calls \(10\) exceeds server limit \(5\)/);
+    },
+    customLimits,
+  );
 
-  // Exceeds max_parallelism
-  assert.throws(() => {
-    validateBatchRequest(
-      {
+  assert.equal(clampedReq.budget.max_worker_calls, 5);
+  assert.equal(clampedReq.budget.max_parallelism, 2);
+  assert.deepEqual(clampedReq.budget_adjustments, [
+    { field: "max_worker_calls", requested: 10, applied: 5 },
+    { field: "max_parallelism", requested: 8, applied: 2 },
+  ]);
+});
+
+test("validateBatchRequest clamps all budget fields and reports adjustments", () => {
+  const customLimits = {
+    maxTasks: 5,
+    maxGates: 5,
+    maxWorkerCalls: 10,
+    maxReplans: 1,
+    maxRepairAttempts: 2,
+    maxParallelism: 4,
+    maxWallTimeMs: 120_000,
+  };
+
+  const req = validateBatchRequest(
+    {
+      schema_version: "1",
+      workspace: { root: "/tmp" },
+      tasks: [
+        {
+          id: "t1",
+          objective: "1",
+          scope: { include: ["src/**"] },
+          owns: ["src/a.ts"],
+        },
+      ],
+      budget: {
+        max_worker_calls: 25,
+        max_replans: 3,
+        max_repair_attempts: 4,
+        max_parallelism: 8,
+        wall_time_ms: 300_000,
+      },
+    },
+    customLimits,
+  );
+
+  assert.equal(req.budget.max_worker_calls, 10);
+  assert.equal(req.budget.max_replans, 1);
+  assert.equal(req.budget.max_repair_attempts, 2);
+  assert.equal(req.budget.max_parallelism, 4);
+  assert.equal(req.budget.wall_time_ms, 120_000);
+  assert.deepEqual(req.budget_adjustments, [
+    { field: "max_worker_calls", requested: 25, applied: 10 },
+    { field: "max_replans", requested: 3, applied: 1 },
+    { field: "max_repair_attempts", requested: 4, applied: 2 },
+    { field: "max_parallelism", requested: 8, applied: 4 },
+    { field: "wall_time_ms", requested: 300_000, applied: 120_000 },
+  ]);
+});
+
+test("validateBatchRequest aggregates multiple structural owns validation errors into one message", () => {
+  assert.throws(
+    () => {
+      validateBatchRequest({
         schema_version: "1",
         workspace: { root: "/tmp" },
         tasks: [
           {
-            id: "t1",
+            id: "task1",
             objective: "1",
-            scope: { include: ["src/**"] },
-            owns: ["src/a.ts"],
+            scope: { include: ["src/a/**"] },
+            owns: ["src/other/file1.ts"],
+          },
+          {
+            id: "task2",
+            objective: "2",
+            scope: {
+              include: ["src/b/**"],
+              exclude: ["src/b/secret/**"],
+            },
+            owns: ["src/other/file2.ts", "src/b/secret/key.ts"],
           },
         ],
-        budget: {
-          max_parallelism: 8,
+      });
+    },
+    (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      return (
+        msg.includes(
+          "Task 'task1': owns path src/other/file1.ts is not within scope.include",
+        ) &&
+        msg.includes(
+          "Task 'task2': owns path src/other/file2.ts is not within scope.include",
+        ) &&
+        msg.includes(
+          "Task 'task2': owns path src/b/secret/key.ts overlaps with scope.exclude",
+        )
+      );
+    },
+  );
+});
+
+test("validateBatchRequest handles trailing-slash include containing nested owns", () => {
+  // Directory with trailing slash 'alt-backend/' behaves as 'alt-backend/**'
+  assert.doesNotThrow(() => {
+    validateBatchRequest({
+      schema_version: "1",
+      workspace: { root: "/tmp" },
+      tasks: [
+        {
+          id: "t1",
+          objective: "test trailing slash",
+          scope: { include: ["alt-backend/"] },
+          owns: ["alt-backend/app/x/**"],
         },
-      },
-      customLimits,
-    );
-  }, /Requested max_parallelism \(8\) exceeds server limit \(2\)/);
+        {
+          id: "t2",
+          objective: "test trailing slash file",
+          after: ["t1"],
+          scope: { include: ["frontend/"] },
+          owns: ["frontend/src/index.ts"],
+        },
+      ],
+    });
+  });
 });

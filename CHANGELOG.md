@@ -11,6 +11,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Renamed tool and repository to `agy-orch-mcp`.
 - **Breaking:** `antigravity_continue` now requires `conversation_id`. Implicit latest-conversation continuation (`--continue`), which took exclusive access to the server and blocked every other call, has been removed.
 - Tool descriptions and delegation guidance now route independent tasks to new `antigravity_run` calls and parallel code changes to `antigravity_batch`, and document host-specific parallelism (Claude Code serializes non-read-only MCP tools; Codex needs `supports_parallel_tool_calls = true`).
+- Elevated `antigravity_batch` server default limits (`maxWallTimeMs = 7_200_000`, `maxWorkerCalls = 50`, `maxParallelism = min(16, AGY_MCP_MAX_CONCURRENT)`).
+- Batch budget parameters exceeding server limits are now automatically clamped and surfaced in `budget_adjustments` rather than rejected.
+- Structural validation errors in `antigravity_batch` (owns vs. scope containment, DAG cycles, task/gate limits) are now aggregated into a single descriptive message.
+- Removed unsupported `"snapshot"` value from `dirty_policy`; only `"reject"` remains.
+- Normalized directory patterns ending with a trailing slash (`dir/`) as equivalent to `dir/**` in ownership and scope validations.
+- Batch tool text content now provides self-sufficient digests detailing run status, task failure classes and reasons, gate outcomes, budget adjustments, and artifact patch status.
+- Added periodic progress heartbeat notifications for `antigravity_batch` when `progressToken` is present, preventing host idle disconnects on long-running batches.
 
 ### Added
 

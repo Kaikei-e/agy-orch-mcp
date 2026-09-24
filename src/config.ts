@@ -151,10 +151,7 @@ export function loadConfig(
         : undefined,
     limits: {
       ...DEFAULT_SERVER_LIMITS,
-      maxParallelism: Math.min(
-        DEFAULT_SERVER_LIMITS.maxParallelism,
-        maxConcurrent,
-      ),
+      maxParallelism: Math.min(16, maxConcurrent),
     },
     enableFetch,
     enableBatch,

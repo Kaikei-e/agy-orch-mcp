@@ -44,6 +44,8 @@ export interface TaskSpecV1 {
   };
 }
 
+import type { FailureClass } from "./failure.js";
+
 export interface TaskResultV1 {
   id: string;
   status: TaskStatus;
@@ -54,4 +56,5 @@ export interface TaskResultV1 {
   stderr_artifact_id?: string;
   patch_artifact_id?: string;
   error?: string;
+  failure_class?: FailureClass;
 }

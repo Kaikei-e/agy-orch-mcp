@@ -218,6 +218,7 @@ export class StateMachine {
         stderr_artifact_id: task.stderrArtifactId,
         patch_artifact_id: task.patchArtifactId,
         error: task.error,
+        failure_class: task.failure?.code,
       });
     }
     return results;

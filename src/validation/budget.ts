@@ -1,49 +1,78 @@
 import type { BudgetV1 } from "../domain/ir.js";
-import { DEFAULT_SERVER_LIMITS, type ServerLimits } from "../domain/limits.js";
+import {
+  DEFAULT_SERVER_LIMITS,
+  type ServerLimits,
+  type BudgetAdjustment,
+} from "../domain/limits.js";
 
 export function resolveEffectiveBudget(
   requested: BudgetV1 | undefined,
   taskCount: number,
   limits: ServerLimits = DEFAULT_SERVER_LIMITS,
-): { effective: Required<BudgetV1>; errors: string[] } {
-  const errors: string[] = [];
+): { effective: Required<BudgetV1>; adjustments: BudgetAdjustment[] } {
+  const adjustments: BudgetAdjustment[] = [];
 
   const defaultWorkerCalls = Math.min(taskCount + 2, limits.maxWorkerCalls);
   const requestedWorkerCalls =
     requested?.max_worker_calls ?? defaultWorkerCalls;
-  if (requestedWorkerCalls > limits.maxWorkerCalls) {
-    errors.push(
-      `max_worker_calls (${requestedWorkerCalls}) exceeds server limit (${limits.maxWorkerCalls})`,
-    );
+  if (
+    requested?.max_worker_calls !== undefined &&
+    requested.max_worker_calls > limits.maxWorkerCalls
+  ) {
+    adjustments.push({
+      field: "max_worker_calls",
+      requested: requested.max_worker_calls,
+      applied: limits.maxWorkerCalls,
+    });
   }
 
   const requestedReplans = requested?.max_replans ?? 1;
-  if (requestedReplans > limits.maxReplans) {
-    errors.push(
-      `max_replans (${requestedReplans}) exceeds server limit (${limits.maxReplans})`,
-    );
+  if (
+    requested?.max_replans !== undefined &&
+    requested.max_replans > limits.maxReplans
+  ) {
+    adjustments.push({
+      field: "max_replans",
+      requested: requested.max_replans,
+      applied: limits.maxReplans,
+    });
   }
 
   const requestedRepairs = requested?.max_repair_attempts ?? 1;
-  if (requestedRepairs > limits.maxRepairAttempts) {
-    errors.push(
-      `max_repair_attempts (${requestedRepairs}) exceeds server limit (${limits.maxRepairAttempts})`,
-    );
+  if (
+    requested?.max_repair_attempts !== undefined &&
+    requested.max_repair_attempts > limits.maxRepairAttempts
+  ) {
+    adjustments.push({
+      field: "max_repair_attempts",
+      requested: requested.max_repair_attempts,
+      applied: limits.maxRepairAttempts,
+    });
   }
 
   const requestedParallelism =
     requested?.max_parallelism ?? limits.maxParallelism;
-  if (requestedParallelism > limits.maxParallelism) {
-    errors.push(
-      `max_parallelism (${requestedParallelism}) exceeds server limit (${limits.maxParallelism})`,
-    );
+  if (
+    requested?.max_parallelism !== undefined &&
+    requested.max_parallelism > limits.maxParallelism
+  ) {
+    adjustments.push({
+      field: "max_parallelism",
+      requested: requested.max_parallelism,
+      applied: limits.maxParallelism,
+    });
   }
 
   const requestedWallTime = requested?.wall_time_ms ?? limits.maxWallTimeMs;
-  if (requestedWallTime > limits.maxWallTimeMs) {
-    errors.push(
-      `wall_time_ms (${requestedWallTime}) exceeds server limit (${limits.maxWallTimeMs})`,
-    );
+  if (
+    requested?.wall_time_ms !== undefined &&
+    requested.wall_time_ms > limits.maxWallTimeMs
+  ) {
+    adjustments.push({
+      field: "wall_time_ms",
+      requested: requested.wall_time_ms,
+      applied: limits.maxWallTimeMs,
+    });
   }
 
   const effective: Required<BudgetV1> = {
@@ -54,7 +83,7 @@ export function resolveEffectiveBudget(
     wall_time_ms: Math.min(requestedWallTime, limits.maxWallTimeMs),
   };
 
-  return { effective, errors };
+  return { effective, adjustments };
 }
 
 export function validateTotalStringBytes(

@@ -13,8 +13,11 @@ function normalizePattern(pattern: string): string {
 }
 
 export function patternsOverlap(p1: string, p2: string): boolean {
-  const norm1 = normalizePattern(p1);
-  const norm2 = normalizePattern(p2);
+  let norm1 = normalizePattern(p1);
+  let norm2 = normalizePattern(p2);
+
+  if (norm1.endsWith("/")) norm1 = norm1 + "**";
+  if (norm2.endsWith("/")) norm2 = norm2 + "**";
 
   if (norm1 === norm2) return true;
   if (norm1 === "**" || norm1 === "*" || norm2 === "**" || norm2 === "*")

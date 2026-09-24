@@ -12,7 +12,10 @@ import { resolveWorkspace, type Config as BridgeConfig } from "../config.js";
 import type { ProcessRunner } from "../process.js";
 import type { WorkerAdapter } from "../domain/execution.js";
 import type { BatchRequestV1, BatchResponseV1 } from "../domain/ir.js";
-import { estimateMinimalDigestTokens } from "../digest/deterministic.js";
+import {
+  estimateMinimalDigestTokens,
+  formatBatchSummary,
+} from "../digest/deterministic.js";
 import { executeBatch as executeBatchRuntime } from "../runtime/scheduler.js";
 import { validateBatchRequest } from "../validation/schema.js";
 import { createAntigravityWorker } from "../workers/antigravity-worker.js";
@@ -146,8 +149,7 @@ export async function executeBatchTool(
       signal: options.signal,
     });
 
-    // Short text carrying run_id and status only; details reside in structuredContent
-    const humanText = `[agy-orch-mcp] Batch ${response.run_id}: ${response.status}.`;
+    const humanText = formatBatchSummary(response);
 
     return {
       content: [{ type: "text", text: humanText }],

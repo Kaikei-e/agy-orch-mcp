@@ -112,9 +112,18 @@ export const batchRequestSchema = z
     schema_version: z.literal("1"),
     workspace: z
       .object({
-        root: noNul(4_096),
-        base_revision: noNul(256).optional(),
-        dirty_policy: z.enum(["reject", "snapshot"]).default("reject"),
+        root: noNul(4_096).describe(
+          "Absolute path to clean git repository root",
+        ),
+        base_revision: noNul(256)
+          .optional()
+          .describe("Base git revision (commit/branch/tag), defaults to HEAD"),
+        dirty_policy: z
+          .enum(["reject"])
+          .default("reject")
+          .describe(
+            "Must be 'reject'. Dirty working directories are rejected.",
+          ),
       })
       .strict(),
     tasks: z
@@ -124,11 +133,51 @@ export const batchRequestSchema = z
     gates: z.array(gateSpecSchema).max(10).optional(),
     budget: z
       .object({
-        max_worker_calls: z.number().int().min(1).max(50).optional(),
-        max_replans: z.number().int().min(0).max(5).optional(),
-        max_repair_attempts: z.number().int().min(0).max(5).optional(),
-        max_parallelism: z.number().int().min(1).max(16).optional(),
-        wall_time_ms: z.number().int().min(10_000).max(7_200_000).optional(),
+        max_worker_calls: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe(
+            "Max worker CLI calls across all tasks (clamped to server limit if exceeded)",
+          ),
+        max_replans: z
+          .number()
+          .int()
+          .min(0)
+          .max(5)
+          .optional()
+          .describe(
+            "Max dynamic replans on task failure (clamped to server limit if exceeded)",
+          ),
+        max_repair_attempts: z
+          .number()
+          .int()
+          .min(0)
+          .max(5)
+          .optional()
+          .describe(
+            "Max repair task attempts per failing gate (clamped to server limit if exceeded)",
+          ),
+        max_parallelism: z
+          .number()
+          .int()
+          .min(1)
+          .max(16)
+          .optional()
+          .describe(
+            "Max concurrent worker worktrees (clamped to server limit if exceeded)",
+          ),
+        wall_time_ms: z
+          .number()
+          .int()
+          .min(10_000)
+          .max(7_200_000)
+          .optional()
+          .describe(
+            "Total execution wall-time deadline in ms up to 7200000 (2h) (clamped to server limit if exceeded)",
+          ),
       })
       .strict()
       .optional(),
@@ -215,8 +264,15 @@ function computeRecursiveSize(obj: any): number {
 }
 
 export function isPatternContained(child: string, parent: string): boolean {
-  const normChild = child.replace(/\\/g, "/").replace(/\/+/g, "/").trim();
-  const normParent = parent.replace(/\\/g, "/").replace(/\/+/g, "/").trim();
+  let normChild = child.replace(/\\/g, "/").replace(/\/+/g, "/").trim();
+  let normParent = parent.replace(/\\/g, "/").replace(/\/+/g, "/").trim();
+
+  if (normParent.endsWith("/")) {
+    normParent = normParent + "**";
+  }
+  if (normChild.endsWith("/")) {
+    normChild = normChild + "**";
+  }
 
   if (normParent === "**" || normParent === normChild) {
     return true;
@@ -266,35 +322,55 @@ export function validateBatchRequest(
     throw new Error(`Payload exceeds size limit of ${limit} bytes`);
   }
 
+  const errors: string[] = [];
+
   for (const t of req.tasks) {
-    validateGlobPatterns(t.scope.include, "scope.include");
-    if (t.scope.exclude) validateGlobPatterns(t.scope.exclude, "scope.exclude");
-    validateGlobPatterns(t.owns, "owns");
+    try {
+      validateGlobPatterns(t.scope.include, `tasks.${t.id}.scope.include`);
+    } catch (e: any) {
+      errors.push(e.message);
+    }
+    if (t.scope.exclude) {
+      try {
+        validateGlobPatterns(t.scope.exclude, `tasks.${t.id}.scope.exclude`);
+      } catch (e: any) {
+        errors.push(e.message);
+      }
+    }
+    try {
+      validateGlobPatterns(t.owns, `tasks.${t.id}.owns`);
+    } catch (e: any) {
+      errors.push(e.message);
+    }
 
     for (const own of t.owns) {
       const isIncluded = t.scope.include.some((inc) =>
         isPatternContained(own, inc),
       );
       if (!isIncluded) {
-        throw new Error(`owns path ${own} is not within scope.include`);
+        errors.push(
+          `Task '${t.id}': owns path ${own} is not within scope.include`,
+        );
       }
       if (
         t.scope.exclude &&
         t.scope.exclude.some((exc) => patternsOverlap(own, exc))
       ) {
-        throw new Error(`owns path ${own} overlaps with scope.exclude`);
+        errors.push(
+          `Task '${t.id}': owns path ${own} overlaps with scope.exclude`,
+        );
       }
     }
   }
 
   const dagResult = validateDag(req.tasks, req.gates);
   if (!dagResult.valid) {
-    throw new Error(`DAG validation failed: ${dagResult.errors.join("; ")}`);
+    errors.push(`DAG validation failed: ${dagResult.errors.join("; ")}`);
   }
 
   if (serverLimits) {
     if (serverLimits.maxTasks && req.tasks.length > serverLimits.maxTasks) {
-      throw new Error(
+      errors.push(
         `Task count (${req.tasks.length}) exceeds server limit (${serverLimits.maxTasks})`,
       );
     }
@@ -303,57 +379,24 @@ export function validateBatchRequest(
       req.gates &&
       req.gates.length > serverLimits.maxGates
     ) {
-      throw new Error(
+      errors.push(
         `Gate count (${req.gates.length}) exceeds server limit (${serverLimits.maxGates})`,
       );
     }
-    if (req.budget) {
-      if (
-        serverLimits.maxWorkerCalls &&
-        req.budget.max_worker_calls !== undefined &&
-        req.budget.max_worker_calls > serverLimits.maxWorkerCalls
-      ) {
-        throw new Error(
-          `Requested max_worker_calls (${req.budget.max_worker_calls}) exceeds server limit (${serverLimits.maxWorkerCalls})`,
-        );
-      }
-      if (
-        serverLimits.maxReplans !== undefined &&
-        req.budget.max_replans !== undefined &&
-        req.budget.max_replans > serverLimits.maxReplans
-      ) {
-        throw new Error(
-          `Requested max_replans (${req.budget.max_replans}) exceeds server limit (${serverLimits.maxReplans})`,
-        );
-      }
-      if (
-        serverLimits.maxRepairAttempts !== undefined &&
-        req.budget.max_repair_attempts !== undefined &&
-        req.budget.max_repair_attempts > serverLimits.maxRepairAttempts
-      ) {
-        throw new Error(
-          `Requested max_repair_attempts (${req.budget.max_repair_attempts}) exceeds server limit (${serverLimits.maxRepairAttempts})`,
-        );
-      }
-      if (
-        serverLimits.maxParallelism &&
-        req.budget.max_parallelism !== undefined &&
-        req.budget.max_parallelism > serverLimits.maxParallelism
-      ) {
-        throw new Error(
-          `Requested max_parallelism (${req.budget.max_parallelism}) exceeds server limit (${serverLimits.maxParallelism})`,
-        );
-      }
-      if (
-        serverLimits.maxWallTimeMs &&
-        req.budget.wall_time_ms !== undefined &&
-        req.budget.wall_time_ms > serverLimits.maxWallTimeMs
-      ) {
-        throw new Error(
-          `Requested wall_time_ms (${req.budget.wall_time_ms}) exceeds server limit (${serverLimits.maxWallTimeMs})`,
-        );
-      }
-      req.budget = resolveEffectiveBudget(req.budget, serverLimits);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Validation failed: ${errors.join("; ")}`);
+  }
+
+  if (serverLimits && req.budget) {
+    const { effective, adjustments } = resolveEffectiveBudget(
+      req.budget,
+      serverLimits,
+    );
+    req.budget = effective;
+    if (adjustments.length > 0) {
+      req.budget_adjustments = adjustments;
     }
   }
 

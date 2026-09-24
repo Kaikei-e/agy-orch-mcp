@@ -20,6 +20,7 @@ export interface BuildDigestParams {
     gate_id?: string;
     host_decision_required: boolean;
   }>;
+  budget_adjustments?: BatchResponseV1["budget_adjustments"];
   metrics: BatchResponseV1["metrics"];
   maxTokens?: number;
 }
@@ -94,6 +95,87 @@ export function estimateMinimalDigestTokens(params: BuildDigestParams): number {
   );
 }
 
+export function formatBatchSummary(response: BatchResponseV1): string {
+  const lines: string[] = [];
+  lines.push(`[agy-orch-mcp] Batch ${response.run_id}: ${response.status}.`);
+  if (response.summary) {
+    lines.push(`Summary: ${response.summary}`);
+  }
+
+  if (response.budget_adjustments && response.budget_adjustments.length > 0) {
+    lines.push("Budget adjustments (clamped to server limits):");
+    for (const adj of response.budget_adjustments) {
+      lines.push(
+        `  - ${adj.field}: requested ${adj.requested}, applied ${adj.applied}`,
+      );
+    }
+  }
+
+  if (response.tasks && response.tasks.length > 0) {
+    lines.push(`Tasks (${response.tasks.length}):`);
+    for (const t of response.tasks) {
+      const parts: string[] = [];
+      if (t.status === "succeeded" || t.status === "integrated") {
+        const fileCount = t.changed_files?.length ?? 0;
+        parts.push(
+          `${t.status} (${t.attempts} att${fileCount > 0 ? `, ${fileCount} files` : ""})`,
+        );
+      } else {
+        parts.push(t.status);
+        if (t.failure_class) {
+          parts.push(`[${t.failure_class}]`);
+        }
+        if (t.error) {
+          parts.push(`: ${t.error}`);
+        }
+      }
+      lines.push(`  - ${t.id}: ${parts.join(" ")}`);
+    }
+  }
+
+  if (response.gates && response.gates.length > 0) {
+    lines.push(`Gates (${response.gates.length}):`);
+    for (const g of response.gates) {
+      const parts: string[] = [];
+      if (g.status === "passed") {
+        parts.push(`passed (${g.duration_ms}ms)`);
+      } else {
+        parts.push(g.status);
+        if (g.exit_code !== undefined && g.exit_code !== 0) {
+          parts.push(`(exit ${g.exit_code})`);
+        }
+        if (g.failing_tests && g.failing_tests.length > 0) {
+          parts.push(`failing: ${g.failing_tests.join(", ")}`);
+        }
+        if (g.error) {
+          parts.push(`: ${g.error}`);
+        }
+      }
+      lines.push(`  - ${g.id}: ${parts.join(" ")}`);
+    }
+  }
+
+  const patchArtifact = response.artifacts?.find((a) => a.kind === "patch");
+  if (patchArtifact) {
+    lines.push(
+      `Patch: stored as artifact '${patchArtifact.id}' (integration/final.patch, ${patchArtifact.byte_size}B). Changes are NOT applied to workspace. Inspect or apply with antigravity_fetch or git apply.`,
+    );
+  } else if (response.status === "succeeded") {
+    lines.push("Patch: no file modifications generated.");
+  } else {
+    lines.push("Patch: none (batch did not integrate clean changes).");
+  }
+
+  if (response.unresolved && response.unresolved.length > 0) {
+    lines.push("Unresolved issues:");
+    for (const u of response.unresolved) {
+      lines.push(`  - [${u.code}] ${u.message}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 export function buildDeterministicDigest(
   params: BuildDigestParams,
   store: ArtifactStore,
@@ -113,6 +195,7 @@ export function buildDeterministicDigest(
     summary: params.summary,
     tasks: params.tasks,
     gates: params.gates ?? [],
+    budget_adjustments: params.budget_adjustments,
     unresolved: params.unresolved ?? [],
     artifacts,
     metrics: { ...params.metrics },
@@ -143,6 +226,7 @@ export function buildDeterministicDigest(
     ...fullResponse,
     tasks: fullResponse.tasks.map((t) => ({ ...t })),
     gates: fullResponse.gates.map((g) => ({ ...g })),
+    budget_adjustments: fullResponse.budget_adjustments,
     unresolved: fullResponse.unresolved.map((u) => ({ ...u })),
     artifacts: fullResponse.artifacts.map((a) => ({ ...a })),
     summary: fullResponse.summary,
@@ -160,7 +244,7 @@ export function buildDeterministicDigest(
       : structuredPayload;
   };
 
-  let humanContent = `[agy-orch-mcp] Batch ${params.runId}: ${params.status}.`;
+  let humanContent = formatBatchSummary(boundedResponse);
   let totalPayloadTokens = estimateTokenCount(
     calculatePayload(boundedResponse, humanContent),
   );
@@ -196,6 +280,7 @@ export function buildDeterministicDigest(
         (t as any).omitted_files_count = omitted;
       }
     }
+    humanContent = formatBatchSummary(boundedResponse);
     totalPayloadTokens = estimateTokenCount(
       calculatePayload(boundedResponse, humanContent),
     );
@@ -235,6 +320,7 @@ export function buildDeterministicDigest(
         u.message = u.message.slice(0, 60) + "... [trimmed]";
       }
     }
+    humanContent = formatBatchSummary(boundedResponse);
     totalPayloadTokens = estimateTokenCount(
       calculatePayload(boundedResponse, humanContent),
     );
@@ -242,7 +328,9 @@ export function buildDeterministicDigest(
 
   if (totalPayloadTokens > maxTokens) {
     // Stage 4: Extreme budget - strip non-essential artifact metadata and shorten human content
-    boundedResponse.artifacts = [];
+    boundedResponse.artifacts = boundedResponse.artifacts.filter(
+      (a) => a.kind === "patch",
+    );
     if (boundedResponse.summary.length > 80) {
       boundedResponse.summary =
         boundedResponse.summary.slice(0, 80) + "... [trimmed]";

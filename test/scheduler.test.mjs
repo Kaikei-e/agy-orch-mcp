@@ -452,7 +452,7 @@ test("Runtime Scheduler Suite", async (t) => {
   );
 
   await t.test(
-    "Dirty workspace is rejected and unsupported snapshot is rejected",
+    "Dirty workspace is rejected with actionable error and snapshot policy is rejected by schema",
     async () => {
       const { tmpDir, baseRev } = await createTempRepo();
 
@@ -464,36 +464,29 @@ test("Runtime Scheduler Suite", async (t) => {
         );
         const config = createConfig(tmpDir);
 
-        // 1. Test dirty_policy: snapshot is rejected explicitly
-        const snapReq = {
-          schema_version: "1",
-          workspace: {
-            root: tmpDir,
-            base_revision: baseRev,
-            dirty_policy: "snapshot",
-          },
-          tasks: [
-            {
-              id: "t1",
-              objective: "Test",
-              scope: { include: ["src/**"] },
-              owns: ["src/t1.js"],
+        // 1. Test dirty_policy: snapshot is rejected by schema validation
+        const { validateBatchRequest } =
+          await import("../dist/validation/schema.js");
+        assert.throws(() => {
+          validateBatchRequest({
+            schema_version: "1",
+            workspace: {
+              root: tmpDir,
+              base_revision: baseRev,
+              dirty_policy: "snapshot",
             },
-          ],
-        };
-        const snapRes = await executeBatch(snapReq, {
-          store,
-          config,
-          worker: {
-            async execute() {
-              return {};
-            },
-          },
-        });
-        assert.strictEqual(snapRes.status, "failed");
-        assert.match(snapRes.summary, /snapshot.*unsupported/);
+            tasks: [
+              {
+                id: "t1",
+                objective: "Test",
+                scope: { include: ["src/**"] },
+                owns: ["src/t1.js"],
+              },
+            ],
+          });
+        }, /Invalid BatchRequest/);
 
-        // 2. Test uncommitted dirty files are rejected
+        // 2. Test uncommitted dirty files are rejected with actionable fix guidance
         await fs.writeFile(path.join(tmpDir, "dirty.txt"), "dirty content\n");
         const dirtyReq = {
           schema_version: "1",
@@ -521,7 +514,10 @@ test("Runtime Scheduler Suite", async (t) => {
           },
         });
         assert.strictEqual(dirtyRes.status, "failed");
-        assert.match(dirtyRes.summary, /uncommitted changes/);
+        assert.match(
+          dirtyRes.summary,
+          /workspace has uncommitted changes; commit or stash, then retry/,
+        );
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
       }

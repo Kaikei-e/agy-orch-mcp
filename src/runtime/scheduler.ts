@@ -26,7 +26,7 @@ import type {
 import type { FailureClass } from "../domain/failure.js";
 import { validateDag } from "../validation/dag.js";
 import { resolveEffectiveBudget as resolveBudgetValidation } from "../validation/budget.js";
-import type { ServerLimits } from "../domain/limits.js";
+import type { ServerLimits, BudgetAdjustment } from "../domain/limits.js";
 import { DEFAULT_SERVER_LIMITS } from "../domain/limits.js";
 import { StateMachine } from "./state-machine.js";
 import { BudgetTracker, budgetFromV1 } from "./budget.js";
@@ -168,6 +168,7 @@ export class Scheduler {
   private readonly startTime = Date.now();
   private readonly wallTimeMs: number;
   private readonly telemetry: TelemetryLogger;
+  private readonly budgetAdjustments: BudgetAdjustment[];
 
   constructor(private readonly opts: SchedulerOptions) {
     this.traceId = opts.traceId ?? `tr_${randomUUID().slice(0, 8)}`;
@@ -201,11 +202,16 @@ export class Scheduler {
 
     // Resolve effective budget
     const limits = opts.limits ?? opts.config.limits ?? DEFAULT_SERVER_LIMITS;
-    const { effective } = resolveBudgetValidation(
+    const { effective, adjustments } = resolveBudgetValidation(
       opts.request.budget,
       opts.request.tasks.length,
       limits,
     );
+    this.budgetAdjustments =
+      opts.request.budget_adjustments &&
+      opts.request.budget_adjustments.length > 0
+        ? opts.request.budget_adjustments
+        : adjustments;
     this.budget = new BudgetTracker(budgetFromV1(effective));
     this.wallTimeMs = effective.wall_time_ms;
 
@@ -312,14 +318,6 @@ export class Scheduler {
       }
     }
 
-    // Validate workspace & dirty policy
-    if (req.workspace.dirty_policy === "snapshot") {
-      return this.buildErrorResponse(
-        "failed",
-        "dirty_policy: 'snapshot' is currently unsupported. Only 'reject' is allowed.",
-      );
-    }
-
     const repo = new GitRepository(req.workspace.root);
     let baseRevision: string;
     try {
@@ -327,7 +325,8 @@ export class Scheduler {
       if (isDirty) {
         return this.buildErrorResponse(
           "failed",
-          `Workspace at ${req.workspace.root} contains uncommitted changes. dirty_policy: "reject" requires a clean repository.`,
+          `workspace has uncommitted changes; commit or stash, then retry (root: ${req.workspace.root}). dirty_policy: "reject" requires a clean repository.`,
+          "POLICY_DENIED",
         );
       }
       const requestedRef = req.workspace.base_revision ?? "HEAD";
@@ -584,6 +583,10 @@ export class Scheduler {
             summary,
             tasks: taskResults,
             gates: gateResults,
+            budget_adjustments:
+              this.budgetAdjustments.length > 0
+                ? this.budgetAdjustments
+                : undefined,
             unresolved: this.unresolved,
             metrics: finalizedMetrics,
             maxTokens: req.return?.max_tokens,
@@ -1773,6 +1776,10 @@ export class Scheduler {
         summary: message,
         tasks: this.state.buildTaskResults(),
         gates: this.state.buildGateResults(),
+        budget_adjustments:
+          this.budgetAdjustments && this.budgetAdjustments.length > 0
+            ? this.budgetAdjustments
+            : undefined,
         unresolved: [
           {
             code:

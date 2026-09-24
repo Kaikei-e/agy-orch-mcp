@@ -78,6 +78,59 @@ const commonInput = {
     ),
 };
 
+function createProgressHeartbeat(
+  context: ServerContext,
+  initialMessage?: string,
+  heartbeatMessage = "Waiting for Antigravity to finish",
+  intervalMs = 10_000,
+) {
+  const token = context.mcpReq._meta?.progressToken;
+  let progress = 0;
+  let sending = false;
+  let finished = false;
+
+  const notify = (message: string) => {
+    if (
+      token === undefined ||
+      finished ||
+      sending ||
+      context.mcpReq.signal.aborted
+    ) {
+      return;
+    }
+    sending = true;
+    void context.mcpReq
+      .notify({
+        method: "notifications/progress",
+        params: { progressToken: token, progress: ++progress, message },
+      })
+      .catch(() => {
+        /* Disconnects must not produce unhandled rejections. */
+      })
+      .finally(() => {
+        sending = false;
+      });
+  };
+
+  if (initialMessage && token !== undefined) {
+    notify(initialMessage);
+  }
+
+  const heartbeat =
+    token !== undefined
+      ? setInterval(() => notify(heartbeatMessage), intervalMs)
+      : undefined;
+
+  const stop = () => {
+    finished = true;
+    if (heartbeat !== undefined) {
+      clearInterval(heartbeat);
+    }
+  };
+
+  return { notify, stop };
+}
+
 export function createServer(config: Config, runner: ProcessRunner): McpServer {
   const server = new McpServer(
     { name: "agy-orch-mcp", version },
@@ -101,38 +154,13 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     },
     context: ServerContext,
   ) {
-    const token = context.mcpReq._meta?.progressToken;
-    let progress = 0;
-    let sending = false;
-    let finished = false;
-    const notify = (message: string) => {
-      if (
-        token === undefined ||
-        finished ||
-        sending ||
-        context.mcpReq.signal.aborted
-      )
-        return;
-      sending = true;
-      void context.mcpReq
-        .notify({
-          method: "notifications/progress",
-          params: { progressToken: token, progress: ++progress, message },
-        })
-        .catch(() => {
-          /* Disconnects must not produce unhandled rejections. */
-        })
-        .finally(() => {
-          sending = false;
-        });
-    };
-    const heartbeat = setInterval(
-      () => notify("Waiting for Antigravity to finish"),
-      10_000,
+    const heartbeat = createProgressHeartbeat(
+      context,
+      "Starting Antigravity",
+      "Waiting for Antigravity to finish",
     );
     try {
       const workspace = resolveWorkspace(args.workspace, config);
-      notify("Starting Antigravity");
       const options: RunOptions = {
         prompt: args.prompt,
         workspace,
@@ -143,7 +171,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         timeoutSec: args.timeout_seconds,
         conversationId: args.conversation_id,
         signal: context.mcpReq.signal,
-        onProgress: notify,
+        onProgress: heartbeat.notify,
         returnMode: args.return_mode,
         store,
       };
@@ -163,8 +191,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         config.maxOutputChars,
       );
     } finally {
-      finished = true;
-      clearInterval(heartbeat);
+      heartbeat.stop();
     }
   }
 
@@ -244,12 +271,21 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
   }
 
   if (config.enableBatch) {
+    const batchDescription =
+      `Execute a DAG of isolated tasks and verification gates with bounded retry. ` +
+      `Each task runs in an isolated git worktree, and the workspace must be a clean git tree. ` +
+      `Integrated changes are stored as a final patch artifact (final.patch) rather than applied directly to the host workspace. ` +
+      `Task owns patterns must be strictly within scope.include and disjoint from scope.exclude. ` +
+      `Effective limits: up to ${config.limits.maxTasks} tasks, ${config.limits.maxGates} gates, ` +
+      `${config.limits.maxParallelism} parallel tasks, ${config.limits.maxWorkerCalls} worker calls, ` +
+      `and ${config.limits.maxWallTimeMs}ms (${Math.round(config.limits.maxWallTimeMs / 60_000)} min) wall time. ` +
+      `Budget values exceeding server limits are automatically clamped and reported in budget_adjustments instead of rejected.`;
+
     server.registerTool(
       "antigravity_batch",
       {
         title: "Execute Antigravity task DAG batch",
-        description:
-          "Execute a directed acyclic graph (DAG) of isolated tasks and verification gates with bounded retry, producing structured digests and artifacts.",
+        description: batchDescription,
         inputSchema: batchRequestSchema,
         annotations: {
           readOnlyHint: false,
@@ -271,6 +307,11 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
           };
         }
         activeBatchCalls++;
+        const heartbeat = createProgressHeartbeat(
+          context,
+          "Starting batch execution",
+          "Waiting for Antigravity batch to finish",
+        );
         try {
           return await executeBatchTool(args, {
             store,
@@ -279,6 +320,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
             signal: context.mcpReq.signal,
           });
         } finally {
+          heartbeat.stop();
           activeBatchCalls--;
         }
       },

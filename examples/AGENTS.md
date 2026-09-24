@@ -28,7 +28,7 @@ When delegating a task to `antigravity_run`, structure the prompt with:
 - **Self-Testing**: Workers must run project test suites and resolve issues within the agy session before completing.
 - **Continuation**: Use `antigravity_continue` (with the required `conversation_id`) only for direct follow-ups to the same conversation. Start every independent task with a new `antigravity_run`.
 - **Choosing a parallel strategy** (by task type, not by host):
-  - Parallel code changes: use `antigravity_batch`. Each task runs in an isolated Git worktree with validated `owns`, and results return as `final.patch`, so tasks cannot collide in the workspace. Parallelism happens inside a single tool call and does not depend on the host.
+  - Parallel code changes: use `antigravity_batch`. Each task runs in an isolated Git worktree with validated `owns`, and results return as `final.patch`, so tasks cannot collide in the workspace. Parallelism happens inside a single tool call and does not depend on the host. Requires a clean Git working tree; budget values exceeding server limits are automatically clamped and reported.
   - Single tasks and direct follow-ups: `antigravity_run`, then `antigravity_continue` with an explicit ID.
   - Parallel read-only investigations: issue separate `antigravity_run` calls. Whether they actually overlap depends on the host (see below).
 - **Host parallelism**: `antigravity_run` and `antigravity_continue` declare `readOnlyHint: false`, so hosts execute them one at a time by default.

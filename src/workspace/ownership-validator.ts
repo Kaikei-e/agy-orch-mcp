@@ -104,19 +104,27 @@ export class OwnershipValidator {
     }
   }
 
+  private normalizePatternForValidator(p: string): string {
+    if (p.endsWith("/")) return p + "**";
+    return p;
+  }
+
   private isPatternCoveredBy(pattern: string, covers: string[]): boolean {
-    return covers.some((c) => {
-      if (c === pattern) return true;
+    const normPattern = this.normalizePatternForValidator(pattern);
+    return covers.some((rawC) => {
+      const c = this.normalizePatternForValidator(rawC);
+      if (c === normPattern) return true;
       if (c === "/**" || c === "*") return true;
       if (c.endsWith("/**")) {
         const dir = c.slice(0, -3);
         if (dir === "") return true;
-        return pattern === dir || pattern.startsWith(dir + "/");
+        return normPattern === dir || normPattern.startsWith(dir + "/");
       }
       if (c.endsWith("/*")) {
         const dir = c.slice(0, -2);
-        if (pattern.endsWith("/*") || pattern.endsWith("/**")) return false;
-        const pDir = path.dirname(pattern);
+        if (normPattern.endsWith("/*") || normPattern.endsWith("/**"))
+          return false;
+        const pDir = path.dirname(normPattern);
         return pDir === dir || (pDir === "." && dir === "");
       }
       return false;
@@ -213,7 +221,8 @@ export class OwnershipValidator {
     return true;
   }
 
-  private matchPattern(pattern: string, filePath: string): boolean {
+  private matchPattern(rawPattern: string, filePath: string): boolean {
+    const pattern = this.normalizePatternForValidator(rawPattern);
     if (pattern === filePath) return true;
     if (pattern === "/**" || pattern === "*") return true;
 

@@ -32,18 +32,18 @@
    - `antigravity_batch` never writes changes directly to the host working tree.
    - Tasks execute within isolated Git worktrees. Validated changes are integrated into an integration worktree and published exclusively as an artifact (`final.patch`), leaving the working directory untouched.
 2. **Clean Git Workspace Requirement**:
-   - `workspace.dirty_policy` defaults to `"reject"`. The target workspace must have no uncommitted changes.
-   - `dirty_policy: "snapshot"` is currently **unsupported and rejected** at runtime preflight.
+   - `workspace.dirty_policy` is `"reject"`. The target workspace must have no uncommitted changes; dirty trees fail preflight with an actionable error.
+   - The previously proposed `"snapshot"` policy was removed from the schema and domain models.
 3. **Ownership vs. Reference Scope**:
-   - `task.owns` defines the strictly exclusive file patterns a worker is permitted to modify (`owns ⊆ scope.include` and `owns ∩ scope.exclude = ∅`).
+   - `task.owns` defines the strictly exclusive file patterns a worker is permitted to modify (`owns ⊆ scope.include` and `owns ∩ scope.exclude = ∅`). Trailing-slash directories (e.g. `dir/`) are normalized to `dir/**`.
    - `scope.include` defines the broader read/reference visibility granted to the task.
 4. **No OS Sandbox Boundary Claim**:
    - Process containment relies on application-level Git worktrees, static path validations, and command allowlists. It provides defense-in-depth orchestration hygiene, **not** an OS-level security or virtualization boundary.
 5. **Gate Command Specifications**:
    - `gate.command` requires an explicit argv array (`string[]`), never an unparsed shell command string, preventing shell injection and unmonitored subshells.
    - `GateRunner.runGate` supports typed `signal?: AbortSignal` (6th argument) and terminates process groups promptly upon cancellation without false-passed gates.
-6. **Bounded Recovery & Budgets**:
-   - Execution loops are bounded by `budget.max_worker_calls` (default 50), `max_repair_attempts` (default 3), `max_replans` (default 2), and a strict `wall_time_ms` deadline enforced by `CancellationManager`.
+6. **Bounded Recovery, Budgets & Clamping**:
+   - Execution loops are bounded by `budget.max_worker_calls` (default 50), `max_repair_attempts` (default 3), `max_replans` (default 2), and a strict `wall_time_ms` deadline (default 7,200,000ms / 2h). Over-limit budget values are automatically clamped and reported via `budget_adjustments`. Long batches emit progress heartbeats when a progressToken is supplied.
 7. **Safe Fetch Pointers**:
    - `antigravity_fetch` retrieves structured slices of prior run artifacts using logical selectors (`task:<id>:stdout`, `task:<id>:stderr`, `gate:<id>:stdout`, `gate:<id>:stderr`, `manifest`, `digest`) or internal artifact IDs with cursor-based pagination (`byte_offset`). Raw filesystem paths are never accepted.
 8. **Preflight Token Budget Capacity & Envelope Trimming**:

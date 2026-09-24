@@ -2,6 +2,7 @@ import type { ArtifactKind, ArtifactMetadata } from "./artifact.js";
 import type { FailureClass } from "./failure.js";
 import type { GateResultV1, GateSpecV1 } from "./gate.js";
 import type { TaskResultV1, TaskSpecV1, TaskStatus } from "./task.js";
+import type { BudgetAdjustment } from "./limits.js";
 
 export * from "./artifact.js";
 export * from "./failure.js";
@@ -12,7 +13,7 @@ export * from "./task.js";
 export interface WorkspaceSpecV1 {
   root: string;
   base_revision?: string;
-  dirty_policy?: "reject" | "snapshot";
+  dirty_policy?: "reject";
 }
 
 export interface BudgetV1 {
@@ -35,6 +36,7 @@ export interface BatchRequestV1 {
   tasks: TaskSpecV1[];
   gates?: GateSpecV1[];
   budget?: BudgetV1;
+  budget_adjustments?: BudgetAdjustment[];
   return?: ReturnOptionsV1;
 }
 
@@ -45,6 +47,7 @@ export interface BatchResponseV1 {
   summary: string;
   tasks: TaskResultV1[];
   gates: GateResultV1[];
+  budget_adjustments?: BudgetAdjustment[];
   unresolved: Array<{
     code: FailureClass;
     message: string;

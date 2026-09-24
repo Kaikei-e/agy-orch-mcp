@@ -359,3 +359,41 @@ test("executeBatch: successful execution contract with structuredContent and com
   assert.ok(manifest);
   assert.equal(manifest.run_id, batchResp.run_id);
 });
+
+test("executeBatch: dirty workspace failure text content contains explicit reason and fix guidance", async (t) => {
+  const { config, store, tmpDir, baseRev } = await createTempRepo(t);
+
+  // Dirty the workspace with uncommitted changes
+  await fs.writeFile(path.join(tmpDir, "dirty.txt"), "uncommitted changes\n");
+
+  const worker = {
+    async execute() {
+      throw new Error("Worker should not run on dirty workspace");
+    },
+  };
+
+  const result = await executeBatch(
+    {
+      schema_version: "1",
+      workspace: { root: tmpDir, base_revision: baseRev },
+      tasks: [
+        {
+          id: "task-dirty",
+          objective: "test dirty check",
+          scope: { include: ["src/**"] },
+          owns: ["src/feature.js"],
+        },
+      ],
+    },
+    { store, config, worker },
+  );
+
+  assert.equal(result.isError, true);
+  const text = result.content[0].text;
+  assert.match(text, /\[agy-orch-mcp\] Batch run_/);
+  assert.match(text, /failed/);
+  assert.match(
+    text,
+    /workspace has uncommitted changes; commit or stash, then retry/,
+  );
+});
