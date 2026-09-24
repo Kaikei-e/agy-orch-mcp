@@ -133,7 +133,6 @@ test("argv keeps prompts literal and permission bypass opt-in", () => {
   const continued = buildArgs({
     ...options,
     conversationId: "test-id",
-    continueLatest: true,
     autonomy: "sandbox",
     model: "test-model",
     effort: "high",

@@ -32,9 +32,16 @@
 - **セルフテストと修正ループ**:
   - agy 内で実装・テスト・検証・修正まで自律的に完結させます。外部ホストは最終結果の確認のみを行います。
 - **会話の継続 (Continue)**:
-  - 関連する後続作業や追加修正を行う場合は、`antigravity_run` が返した `conversation_id` を明示して `antigravity_continue` を呼び出します。
-- **独立タスクの並列化**:
-  - 担当ファイルやスコープが重複しない独立したタスクは、異なる会話として並列実行します（サーバー既定で最大 4 件同時実行）。
+  - `antigravity_continue` は同じ会話の直接の続き（直前のタスクへの追加修正・追質問）にのみ使い、`antigravity_run` が返した `conversation_id` を必ず指定します。
+  - 別の独立したタスクは、既存会話の流用ではなく新しい `antigravity_run` で開始します。
+- **並列化の使い分け (タスク種別で選ぶ)**:
+  - **コード変更を伴う並列タスク**: `antigravity_batch` を使います。各タスクが独立した git worktree で実行され、`owns` の検証を経て `final.patch` として返るため、ワークスペースの競合が起きません。ホストのツール並列実行仕様にも依存しません（1 回のツール呼び出し内でサーバーが並列実行します）。
+  - **単発タスク・同一会話の続き**: `antigravity_run` → ID 明示の `antigravity_continue`。
+  - **読み取り専用の調査の並列化**: 異なる会話の `antigravity_run` を同時に発行します（サーバー既定で最大 4 件同時実行）。ただし同時発行が実際に並列実行されるかはホストに依存します（下記）。
+- **ホスト別の並列実行仕様**:
+  - `antigravity_run` / `antigravity_continue` は `readOnlyHint: false` のため、ホストは既定で 1 件ずつ実行します。
+  - **Claude Code**: 同一メッセージ内の同時発行でも直列実行されます。並列化したい場合は `antigravity_batch` を使うか、サブエージェントごとに `antigravity_run` を 1 件ずつ発行します。
+  - **Codex CLI / IDE**: MCP サーバー設定に `supports_parallel_tool_calls = true` を指定すると並列実行されます。同一会話への重複呼び出しはサーバー側ロックが `BUSY` で拒否します。
 - **モデルの選定とキャッシュ**:
   - 利用可能なモデル slug は事前に `antigravity_models` で確認・キャッシュして使用するか、サーバー環境変数 `AGY_MCP_DEFAULT_MODEL` / CLI 既定値を利用し、モデル選定のための無駄なターン消費を抑えます。
 

@@ -100,7 +100,6 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
       conversation_id?: string;
     },
     context: ServerContext,
-    resume: boolean,
   ) {
     const token = context.mcpReq._meta?.progressToken;
     let progress = 0;
@@ -143,7 +142,6 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         autonomy: args.autonomy,
         timeoutSec: args.timeout_seconds,
         conversationId: args.conversation_id,
-        continueLatest: resume && !args.conversation_id,
         signal: context.mcpReq.signal,
         onProgress: notify,
         returnMode: args.return_mode,
@@ -184,24 +182,24 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
       "antigravity_run",
       {
         title: "Run Antigravity",
-        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Parallel calls share workspace files, Antigravity account and quota.`,
+        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Use a new run for every independent task instead of continuing an unrelated conversation. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Whether simultaneous calls actually run in parallel depends on the MCP client. Parallel calls share workspace files, Antigravity account and quota; for parallel code changes prefer antigravity_batch when it is enabled.`,
         inputSchema: z.object(commonInput).strict(),
         annotations,
       },
-      (args, context) => execute(args, context, false),
+      (args, context) => execute(args, context),
     );
 
     server.registerTool(
       "antigravity_continue",
       {
         title: "Continue Antigravity",
-        description: `Policy: ${policy} Follow up in an existing Antigravity conversation. Different explicit conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Without an ID, agy resumes its most recent conversation and requires exclusive access to this server, otherwise BUSY is returned. Other CLI sessions may change the latest conversation. Use the same workspace as the original turn.`,
+        description: `Policy: ${policy} Follow up in an existing Antigravity conversation identified by conversation_id. Use only for a direct continuation of that conversation's task; start independent tasks with antigravity_run. Different conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Use the same workspace as the original turn.`,
         inputSchema: z
-          .object({ ...commonInput, conversation_id: z.uuid().optional() })
+          .object({ ...commonInput, conversation_id: z.uuid() })
           .strict(),
         annotations,
       },
-      (args, context) => execute(args, context, true),
+      (args, context) => execute(args, context),
     );
 
     server.registerTool(

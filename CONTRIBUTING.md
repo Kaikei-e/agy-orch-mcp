@@ -22,7 +22,7 @@ Thanks for improving the project. Small, focused pull requests are easiest to re
 
 - Preserve the stdio protocol: stdout is reserved for MCP JSON-RPC. Use stderr for diagnostics.
 - Treat prompts and returned agent output as untrusted data.
-- The bridge bounds concurrent CLI processes with `AGY_MCP_MAX_CONCURRENT`. Preserve per-call output, progress, cancellation, and deadlines; same-ID continuations must not overlap, and implicit latest-conversation continuation must remain exclusive. Locks apply only within one server; workspace files and external CLI state are shared. Cover parallel execution and shutdown with subprocess and MCP integration tests.
+- The bridge bounds concurrent CLI processes with `AGY_MCP_MAX_CONCURRENT`. Preserve per-call output, progress, cancellation, and deadlines; same-ID continuations must not overlap. Locks apply only within one server; workspace files and external CLI state are shared. Cover parallel execution and shutdown with subprocess and MCP integration tests.
 - Workspace validation is a selection boundary, not an OS sandbox. Avoid describing it as filesystem or network confinement.
 - Keep public documentation in English and Japanese when a user-visible behavior changes.
 

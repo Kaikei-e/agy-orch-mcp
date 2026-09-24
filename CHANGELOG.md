@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Renamed tool and repository to `agy-orch-mcp`.
+- **Breaking:** `antigravity_continue` now requires `conversation_id`. Implicit latest-conversation continuation (`--continue`), which took exclusive access to the server and blocked every other call, has been removed.
+- Tool descriptions and delegation guidance now route independent tasks to new `antigravity_run` calls and parallel code changes to `antigravity_batch`, and document host-specific parallelism (Claude Code serializes non-read-only MCP tools; Codex needs `supports_parallel_tool_calls = true`).
 
 ### Added
 
@@ -21,4 +23,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Initial local MCP bridge for Antigravity CLI runs, conversation continuation, and model listing.
 - OSS documentation, contribution guidance, security reporting guidance, a Claude Code configuration example, and continuous integration.
 - Codex CLI and IDE stdio configuration guidance, including an example TOML file and timeout settings for long-running tools.
-- Configurable parallel CLI execution with `AGY_MCP_MAX_CONCURRENT` (default 4, range 1–32), per-call cancellation, conversation-ID locks, and exclusive latest-conversation continuation. Set the limit to 1 for the previous serial behavior.
+- Configurable parallel CLI execution with `AGY_MCP_MAX_CONCURRENT` (default 4, range 1–32), per-call cancellation, and conversation-ID locks. Set the limit to 1 for the previous serial behavior.

@@ -22,7 +22,7 @@
 | MCP ツール             | 用途                                                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `antigravity_run`      | 新しい Antigravity 会話を開始します。CLI が返した場合は `conversation_id` も返します。                             |
-| `antigravity_continue` | ID を指定して会話を継続します。ID を省略すると `agy` の直近の会話を継続します。                                    |
+| `antigravity_continue` | 必須の `conversation_id` で会話を継続します。同じ会話の直接の続きにのみ使い、新しいタスクは `run` で開始します。   |
 | `antigravity_models`   | `agy models` を実行して CLI の出力を返します。モデルターンは開始しませんが、Antigravity に接続する場合があります。 |
 
 `run` と `continue` は、プロンプト、絶対パスのワークスペース、任意のモデル・effort、`plan` または `accept-edits` の mode、autonomy、実行期限を受け取ります。
@@ -75,8 +75,8 @@
 - `antigravity_models` を含む全コマンドが同時実行数に数えられます。上限超過時は待機キューに入らず、**即座に `BUSY` を返します**。
 - 新規会話や異なる明示的な `conversation_id` のタスクは並列実行できます。
 - 同じ会話 ID を指定した継続呼び出しは排他制御され、後からの呼び出しは即座に `BUSY` を返します。
-- ID 省略の継続（`--continue`）はサーバーを占有し、他の実行がある場合は `BUSY` を返します。
-- 排他制御と上限は 1 つのサーバープロセス内で有効です。ワークスペースのファイル、認証情報、CLI の状態は共有されるため、外部の別セッションが直近の会話を変更する可能性があります。
+- 排他制御と上限は 1 つのサーバープロセス内で有効です。ワークスペースのファイル、認証情報、CLI の状態は共有されます。
+- 同時発行した呼び出しが実際に並列でサーバーに届くかはホストに依存します。`run` / `continue` は `readOnlyHint: false` のため Claude Code では 1 件ずつ実行され、Codex ではサーバー設定に `supports_parallel_tool_calls = true` を指定すると並列実行されます。コード変更の並列化には、1 回の呼び出し内で並列実行し各タスクを worktree で分離する `antigravity_batch` を優先してください。
 - `timeout_seconds` の既定値は 300 で、10〜3600 の整数を指定できます。ツールの期限が先に発効するよう、クライアント側のタイムアウトを少し長め（例: 3660 秒）に設定してください。
 - 応答文字数は `AGY_MCP_MAX_OUTPUT_CHARS`（既定 40000、ホスト負荷軽減のため 16000 推奨）で制限されます。結果が切り詰められた場合はメタデータの `truncated` フラグを確認し、判断前に範囲を絞った追加ターンを要求してください。
 - **`BUSY` への対処**: 短期間での連続再試行（リトライストーム）を避け、待機するか直列化して呼び出します。
@@ -156,6 +156,7 @@ command = "/absolute/path/to/node"
 args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 startup_timeout_sec = 20
 tool_timeout_sec = 3660
+supports_parallel_tool_calls = true
 
 [mcp_servers.antigravity.env]
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"

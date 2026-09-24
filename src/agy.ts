@@ -12,7 +12,6 @@ export interface RunOptions {
   autonomy?: "safe" | "sandbox" | "full";
   timeoutSec?: number;
   conversationId?: string;
-  continueLatest?: boolean;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
   returnMode?: "raw" | "digest";
@@ -135,7 +134,6 @@ export function buildArgs(options: RunOptions): string[] {
   if (options.autonomy === "full") args.push("--dangerously-skip-permissions");
   if (options.conversationId)
     args.push("--conversation", options.conversationId);
-  else if (options.continueLatest) args.push("--continue");
   return args;
 }
 
@@ -193,9 +191,6 @@ export async function runAgy(
     maxArtifactBytes: 50 * 1024 * 1024,
     signal: resolvedOptions.signal,
     lockKey: resolvedOptions.conversationId?.toLowerCase(),
-    exclusive: Boolean(
-      resolvedOptions.continueLatest && !resolvedOptions.conversationId,
-    ),
     onStdout: (chunk) => {
       if (wantsStore) rawStdout.push(chunk);
       pending += chunk;

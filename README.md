@@ -22,7 +22,7 @@ For detailed architecture, design rationale, and operational planning, see [docs
 | MCP tool               | Availability | Purpose                                                                                                                    |
 | ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | `antigravity_run`      | Default      | Starts a new Antigravity conversation and returns its result and, when supplied by the CLI, its `conversation_id`.         |
-| `antigravity_continue` | Default      | Continues a conversation by ID. Without an ID, it asks `agy` to continue its latest conversation.                          |
+| `antigravity_continue` | Default      | Continues a conversation by its required `conversation_id`. Use it only for direct follow-ups; start new tasks with `run`. |
 | `antigravity_models`   | Default      | Runs `agy models` and returns the CLI output. It does not start a model turn, but it may contact Antigravity.              |
 | `antigravity_batch`    | Opt-in       | Executes a multi-task DAG with validation gates in isolated Git worktrees, producing an artifact-only `final.patch`.       |
 | `antigravity_fetch`    | Opt-in       | Retrieves safe slices of artifacts (stdout, stderr, patches, digest, manifest, request, plan, events) by logical selector. |
@@ -92,8 +92,8 @@ The server runs up to four `agy` commands concurrently by default (`AGY_MCP_MAX_
 - All commands, including `antigravity_models`, count toward the concurrency limit. Calls exceeding the limit immediately return `BUSY` and are **not queued**.
 - Independent tasks with different explicit `conversation_id` values or new runs can execute in parallel.
 - Concurrent requests using the same explicit conversation ID serialize: the second request immediately returns `BUSY`.
-- Continuation without an ID (`--continue`) requires exclusive access to the server and returns `BUSY` while any other call is active.
-- Conversation locks and limits apply within one server process. Workspace files, credentials, and CLI state remain shared; external CLI sessions can alter the latest conversation.
+- Conversation locks and limits apply within one server process. Workspace files, credentials, and CLI state remain shared.
+- Whether simultaneous calls reach the server concurrently depends on the host. `run` and `continue` declare `readOnlyHint: false`, so Claude Code executes them one at a time; Codex runs them concurrently when the server entry sets `supports_parallel_tool_calls = true`. For parallel code changes, prefer `antigravity_batch`, which parallelizes inside a single call and isolates each task in its own worktree.
 - `timeout_seconds` defaults to 300 and accepts integers from 10 through 3600. Configure the MCP client's own tool timeout slightly longer (e.g. 3660s) so the tool deadline fires first.
 - Returned tool responses are capped by `AGY_MCP_MAX_OUTPUT_CHARS` (default 40000; 16000 recommended for host context efficiency). When output is truncated, verify the truncated metadata and request focused follow-up turns before making decisions.
 - **Handling `BUSY`**: The client must wait or serialize calls rather than triggering rapid retry storms.
@@ -173,6 +173,7 @@ command = "/absolute/path/to/node"
 args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 startup_timeout_sec = 20
 tool_timeout_sec = 3660
+supports_parallel_tool_calls = true
 
 [mcp_servers.antigravity.env]
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"

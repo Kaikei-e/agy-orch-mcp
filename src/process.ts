@@ -19,7 +19,6 @@ export interface ProcessOptions {
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
   lockKey?: string;
-  exclusive?: boolean;
 }
 
 const failureResult = (
@@ -58,7 +57,6 @@ export class ProcessRunner {
     stop: () => void;
     done: Promise<ProcessResult>;
     lockKey?: string;
-    exclusive: boolean;
   }>();
   private closed = false;
 
@@ -78,17 +76,6 @@ export class ProcessRunner {
     if (this.closed || options.signal?.aborted)
       return Promise.resolve(
         failureResult("CANCELED", "Request canceled before starting agy"),
-      );
-    if (
-      this.active.size > 0 &&
-      (options.exclusive ||
-        [...this.active].some((process) => process.exclusive))
-    )
-      return Promise.resolve(
-        failureResult(
-          "BUSY",
-          "Continuing the latest conversation requires exclusive access. Wait for active calls to finish or use an explicit conversation_id.",
-        ),
       );
     if (
       options.lockKey !== undefined &&
@@ -235,7 +222,6 @@ export class ProcessRunner {
       stop: () => cancel(),
       done,
       lockKey: options.lockKey,
-      exclusive: options.exclusive ?? false,
     };
     this.active.add(active);
     void done.then(() => {

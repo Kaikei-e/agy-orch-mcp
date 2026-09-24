@@ -188,11 +188,21 @@ test("models, new turns, and explicit or implicit continuation pass safe argv", 
     ),
   );
 
-  const implicit = await pair.client.callTool({
-    name: "antigravity_continue",
-    arguments: { prompt: "implicit", workspace: root, timeout_seconds: 10 },
-  });
-  assert.ok(JSON.parse(valueOf(implicit).response).argv.includes("--continue"));
+  let implicit;
+  try {
+    implicit = await pair.client.callTool({
+      name: "antigravity_continue",
+      arguments: { prompt: "implicit", workspace: root, timeout_seconds: 10 },
+    });
+  } catch (error) {
+    implicit = error;
+  }
+  if (implicit?.isError !== undefined) assert.equal(implicit.isError, true);
+  else
+    assert.match(
+      String(implicit?.message ?? implicit),
+      /conversation_id|invalid|validation/i,
+    );
 });
 
 test("validation, policy, and workspace failures are returned as tool errors", async (t) => {
@@ -343,11 +353,6 @@ test(
       arguments: {},
     });
     assert.equal(models.isError, false);
-    const latest = await pair.client.callTool({
-      name: "antigravity_continue",
-      arguments: { prompt: "ok" },
-    });
-    assert.equal(valueOf(latest).status, "BUSY");
 
     writeFileSync(`${gates[0]}.release`, "");
     const first = valueOf(await pending[0]);

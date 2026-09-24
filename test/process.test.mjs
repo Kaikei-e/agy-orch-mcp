@@ -220,40 +220,6 @@ test(
 );
 
 test(
-  "implicit continuation is exclusive in both directions",
-  { timeout: 8_000 },
-  async (t) => {
-    const [first, second] = await barriers(t, 2);
-    const runner = new ProcessRunner();
-    t.after(() => runner.close());
-    const run = (extra) =>
-      runAgy(
-        { prompt: "ok", workspace: process.cwd(), ...extra },
-        config,
-        runner,
-      );
-    const active = run({ prompt: first.prompt });
-    await first.ready();
-    assert.equal((await run({ continueLatest: true })).status, "BUSY");
-    first.release();
-    assert.equal((await active).ok, true);
-
-    const latest = run({ prompt: second.prompt, continueLatest: true });
-    await second.ready();
-    assert.equal((await run({})).status, "BUSY");
-    assert.equal(
-      (await run({ conversationId: "055a398f-db14-4c5f-abbb-1bf03f8120a7" }))
-        .status,
-      "BUSY",
-    );
-    assert.equal((await run({ continueLatest: true })).status, "BUSY");
-    second.release();
-    assert.equal((await latest).ok, true);
-    assert.equal((await run({})).ok, true);
-  },
-);
-
-test(
   "cancellation kills descendants in the CLI process group",
   { skip: process.platform !== "linux", timeout: 8_000 },
   async (t) => {

@@ -9,6 +9,9 @@ command = "/absolute/path/to/node"
 args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 startup_timeout_sec = 20
 tool_timeout_sec = 3660
+# Lets Codex run simultaneous antigravity_run calls concurrently; the server
+# still rejects same-conversation overlaps and calls above the limit with BUSY.
+supports_parallel_tool_calls = true
 
 [mcp_servers.antigravity.env]
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"
