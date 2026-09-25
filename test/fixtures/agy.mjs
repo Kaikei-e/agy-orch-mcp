@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const args = process.argv.slice(2);
@@ -53,6 +55,40 @@ if (args[0] === "--version") {
     },
   });
   setInterval(() => {}, 1_000);
+} else if (prompt === "denied-command") {
+  // Mirrors agy, which records the rejected command line only in the transcript.
+  const logs = path.join(
+    os.homedir(),
+    ".gemini/antigravity-cli/brain",
+    id,
+    ".system_generated/logs",
+  );
+  mkdirSync(logs, { recursive: true });
+  const denial = (command, createdAt) =>
+    JSON.stringify({
+      step_index: 1,
+      type: "GENERIC",
+      status: "ERROR",
+      created_at: createdAt,
+      error: `permission check failed for unsandboxed "${command}": user denied permission to run command:\n${command}\nDo not attempt to circumvent this denial.`,
+    });
+  writeFileSync(
+    path.join(logs, "transcript.jsonl"),
+    [
+      denial("rm -rf stale", "2000-01-01T00:00:00Z"),
+      denial("git ls-tree HEAD", new Date().toISOString()),
+      "not json",
+    ].join("\n") + "\n",
+  );
+  emit({
+    event: "result",
+    result: {
+      status: "SUCCESS",
+      response: "",
+      conversation_id: id,
+      denied_actions: [{ action: "command", display_name: "RunCommand" }],
+    },
+  });
 } else if (prompt === "malformed") {
   console.log("Authentication required");
 } else {

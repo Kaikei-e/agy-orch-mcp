@@ -1,6 +1,8 @@
 import { McpServer, type ServerContext } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { listModels, runAgy, type RunOptions } from "./agy.js";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { listModels, runAgy, type RunOptions, type RunResult } from "./agy.js";
 import { resolveWorkspace, type Config } from "./config.js";
 import { ProcessRunner } from "./process.js";
 import { toToolResult } from "./result.js";
@@ -20,7 +22,7 @@ const text = (max: number) =>
     .refine((value) => !value.includes("\0"), "NUL characters are not allowed");
 
 const policy =
-  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-orch-mcp or delegating back.";
+  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. State the commands the worker may run positively; on PERMISSION_DENIED, continue with a named permitted alternative instead of repeating a prohibition. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-orch-mcp or delegating back.";
 
 const commonInput = {
   prompt: text(32_000)
@@ -148,6 +150,56 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     // Non-fatal retention failure on startup
   }
 
+  const conversations = new Map<
+    string,
+    { turns: number; totalTokens: number }
+  >();
+
+  function trackContext(result: RunResult): RunResult["context"] {
+    const id = result.conversationId?.toLowerCase();
+    if (!id) return undefined;
+    const entry = conversations.get(id) ?? { turns: 0, totalTokens: 0 };
+    const tokens = result.usage?.total_tokens;
+    entry.turns++;
+    if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0)
+      entry.totalTokens += tokens;
+    conversations.set(id, entry);
+    const rotate = entry.totalTokens >= config.contextRotateTokens;
+    return {
+      turns: entry.turns,
+      cumulative_total_tokens: entry.totalTokens,
+      rotate_recommended: rotate,
+      ...(rotate
+        ? {
+            advice: `This conversation has used ${entry.totalTokens} tokens over ${entry.turns} turns (threshold ${config.contextRotateTokens}). Long agy conversations degrade into hallucinated code and unpermitted commands. Start the next step with a new antigravity_run whose prompt carries a compact handoff: goal, decisions made, constraints, changed files, and open issues.`,
+          }
+        : {}),
+    };
+  }
+
+  // Keeps an over-budget response recoverable instead of silently cut.
+  function saveFullResponse(
+    result: RunResult,
+    workspace: string,
+  ): RunResult["responseArtifact"] {
+    try {
+      const runId = result.runId ?? `run_${randomUUID().slice(0, 12)}`;
+      if (!store.loadManifest(runId)) store.initRun(runId, workspace);
+      const artifact = store.saveArtifact({
+        runId,
+        kind: "result",
+        relativePath: "response.txt",
+        content: result.response,
+      });
+      return {
+        id: artifact.id,
+        path: path.join(store.getRunDir(runId), "response.txt"),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   async function execute(
     args: z.infer<z.ZodObject<typeof commonInput>> & {
       conversation_id?: string;
@@ -175,10 +227,18 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         returnMode: args.return_mode,
         store,
       };
-      return toToolResult(
-        await runAgy(options, config, runner),
-        config.maxOutputChars,
-      );
+      const result = await runAgy(options, config, runner);
+      result.context = trackContext(result);
+      const bounded = toToolResult(result, config.maxOutputChars);
+      const shown = (
+        bounded.structuredContent as Record<string, unknown> | undefined
+      )?.response;
+      if (typeof shown !== "string" || shown.length >= result.response.length)
+        return bounded;
+      result.responseArtifact = saveFullResponse(result, workspace);
+      return result.responseArtifact
+        ? toToolResult(result, config.maxOutputChars)
+        : bounded;
     } catch (error) {
       return toToolResult(
         {
@@ -220,7 +280,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
       "antigravity_continue",
       {
         title: "Continue Antigravity",
-        description: `Policy: ${policy} Follow up in an existing Antigravity conversation identified by conversation_id. Use only for a direct continuation of that conversation's task; start independent tasks with antigravity_run. Different conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Use the same workspace as the original turn.`,
+        description: `Policy: ${policy} Follow up in an existing Antigravity conversation identified by conversation_id. Use only for a direct continuation of that conversation's task; start independent tasks with antigravity_run. Different conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Use the same workspace as the original turn. When a result reports context.rotate_recommended, start a new antigravity_run with a compact handoff instead of continuing.`,
         inputSchema: z
           .object({ ...commonInput, conversation_id: z.uuid() })
           .strict(),

@@ -52,7 +52,8 @@ The default request settings are `mode: "plan"` and `autonomy: "safe"`.
   - `full`: Passes `--dangerously-skip-permissions` to the CLI. Rejected unless `AGY_MCP_ALLOW_FULL_AUTONOMY=true` is set in the server environment.
 - `AGY_MCP_ALLOWED_ROOT`, when set, permits only canonical workspaces beneath that root. This restricts **workspace selection only**; it does **not** sandbox a child process's filesystem or network access.
 - **Bridge Error Classification**: The bridge parses raw CLI output envelopes and refines the status:
-  - When `agy` outputs a `SUCCESS` status but records `denied_actions`, the bridge classifies the result as `status: "PERMISSION_DENIED"` with actionable error guidance, preserving the `denied_actions` list in the response metadata.
+  - When `agy` outputs a `SUCCESS` status but records `denied_actions`, the bridge classifies the result as `status: "PERMISSION_DENIED"` with actionable error guidance, preserving the `denied_actions` list in the response metadata. Because agy reports only the action type, the bridge reads the rejected command lines for that turn from the agy conversation transcript and returns them as `denied_commands`.
+  - Every run/continue result carries `context` (turns and cumulative `total_tokens` observed by this server process for the conversation). Past `AGY_MCP_CONTEXT_ROTATE_TOKENS`, `context.rotate_recommended` is `true` and the host should start a new `antigravity_run` with a compact handoff instead of continuing a degraded conversation.
   - When `agy` outputs a `SUCCESS` status with an empty response string, the bridge classifies the result as `status: "EMPTY_RESPONSE"`, alerting the caller to review potential workspace side effects before retrying.
   - _(Note: These classifications are synthesized by the `agy-orch-mcp` bridge layer to provide robust MCP semantics, rather than raw CLI terminal statuses)._
 
@@ -95,7 +96,7 @@ The server runs up to four `agy` commands concurrently by default (`AGY_MCP_MAX_
 - Conversation locks and limits apply within one server process. Workspace files, credentials, and CLI state remain shared.
 - Whether simultaneous calls reach the server concurrently depends on the host. `run` and `continue` declare `readOnlyHint: false`, so Claude Code executes them one at a time; Codex runs them concurrently when the server entry sets `supports_parallel_tool_calls = true`. For parallel code changes, prefer `antigravity_batch`, which parallelizes inside a single call and isolates each task in its own worktree.
 - `timeout_seconds` defaults to 300 and accepts integers from 10 through 3600. Configure the MCP client's own tool timeout slightly longer (e.g. 3660s) so the tool deadline fires first.
-- Returned tool responses are capped by `AGY_MCP_MAX_OUTPUT_CHARS` (default 40000; 16000 recommended for host context efficiency). When output is truncated, verify the truncated metadata and request focused follow-up turns before making decisions.
+- Returned tool responses are capped by `AGY_MCP_MAX_OUTPUT_CHARS` (default 40000; 16000 recommended for host context efficiency). When the response is truncated, the full text is saved in the artifact store and its location is returned as `response_artifact.path`; read only the parts you need from that file.
 - **Handling `BUSY`**: The client must wait or serialize calls rather than triggering rapid retry storms.
 - **Handling Timeouts and `EMPTY_RESPONSE`**: When a command times out or returns an empty response, inspect the workspace (`git status`) to evaluate partial side effects before retrying.
 - **Handling `PERMISSION_DENIED` and Errors**: Report the specific blocker to the user rather than silently shifting the execution workload back to the host.
@@ -229,22 +230,23 @@ When introducing these templates to an existing project, **merge** the rules int
 
 ## Configuration Reference
 
-| Variable                      | Default                  | Meaning                                                                                     |
-| ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
-| `AGY_MCP_BIN`                 | `agy`                    | CLI executable name, or an absolute or relative path to the executable.                     |
-| `AGY_MCP_DEFAULT_WORKSPACE`   | server current directory | Default workspace directory.                                                                |
-| `AGY_MCP_ALLOWED_ROOT`        | unset                    | Optional canonical root restricting permitted workspaces.                                   |
-| `AGY_MCP_DEFAULT_MODEL`       | unset                    | Optional default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > CLI.  |
-| `AGY_MCP_FAST_MODEL`          | unset                    | Optional fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.             |
-| `AGY_MCP_REASONING_MODEL`     | unset                    | Optional reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.     |
-| `AGY_MCP_ENABLE_BATCH`        | `false`                  | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch) |
-| `AGY_MCP_ENABLE_FETCH`        | `false`                  | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch) |
-| `AGY_MCP_TOOL_SURFACE`        | `all`                    | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).    |
-| `AGY_MCP_MAX_CONCURRENT`      | `4`                      | Maximum simultaneous CLI child processes (1–32).                                            |
-| `AGY_MCP_MAX_OUTPUT_CHARS`    | `40000`                  | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).   |
-| `AGY_MCP_MAX_BUFFER_BYTES`    | `8388608`                | Maximum captured CLI stdout buffer per process before termination (1024–67108864).          |
-| `AGY_MCP_ALLOW_FULL_AUTONOMY` | `false`                  | Set to `true` to permit requests with `autonomy: "full"`.                                   |
-| `AGY_ORCH_STORAGE_DIR`        | unset                    | Optional directory for artifact store and telemetry (defaults to XDG state/cache path).     |
+| Variable                        | Default                  | Meaning                                                                                                         |
+| ------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `AGY_MCP_BIN`                   | `agy`                    | CLI executable name, or an absolute or relative path to the executable.                                         |
+| `AGY_MCP_DEFAULT_WORKSPACE`     | server current directory | Default workspace directory.                                                                                    |
+| `AGY_MCP_ALLOWED_ROOT`          | unset                    | Optional canonical root restricting permitted workspaces.                                                       |
+| `AGY_MCP_DEFAULT_MODEL`         | unset                    | Optional default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > CLI.                      |
+| `AGY_MCP_FAST_MODEL`            | unset                    | Optional fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.                                 |
+| `AGY_MCP_REASONING_MODEL`       | unset                    | Optional reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.                         |
+| `AGY_MCP_ENABLE_BATCH`          | `false`                  | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch)                     |
+| `AGY_MCP_ENABLE_FETCH`          | `false`                  | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch)                     |
+| `AGY_MCP_TOOL_SURFACE`          | `all`                    | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).                        |
+| `AGY_MCP_MAX_CONCURRENT`        | `4`                      | Maximum simultaneous CLI child processes (1–32).                                                                |
+| `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                  | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).                       |
+| `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                | Cumulative `total_tokens` per conversation after which results set `context.rotate_recommended` (1–1000000000). |
+| `AGY_MCP_MAX_BUFFER_BYTES`      | `8388608`                | Maximum captured CLI stdout buffer per process before termination (1024–67108864).                              |
+| `AGY_MCP_ALLOW_FULL_AUTONOMY`   | `false`                  | Set to `true` to permit requests with `autonomy: "full"`.                                                       |
+| `AGY_ORCH_STORAGE_DIR`          | unset                    | Optional directory for artifact store and telemetry (defaults to XDG state/cache path).                         |
 
 ## Development
 

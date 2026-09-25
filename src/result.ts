@@ -17,7 +17,14 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
     ...(result.deniedActions?.length
       ? { denied_actions: result.deniedActions }
       : {}),
+    ...(result.deniedCommands?.length
+      ? { denied_commands: result.deniedCommands }
+      : {}),
     ...(result.usage ? { usage: result.usage } : {}),
+    ...(result.context ? { context: result.context } : {}),
+    ...(result.responseArtifact
+      ? { response_artifact: result.responseArtifact }
+      : {}),
     ...(!result.ok && result.stderr ? { stderr: result.stderr } : {}),
     ...(result.runId ? { run_id: result.runId } : {}),
     ...(result.traceId ? { trace_id: result.traceId } : {}),
@@ -31,9 +38,10 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
   let text = JSON.stringify(data);
   if (text.length > limit) {
     data.truncated = true;
-    data.truncation_notice =
-      "Output shortened; ask a narrower question or raise AGY_MCP_MAX_OUTPUT_CHARS.";
-    for (const key of ["denied_actions", "usage"]) {
+    data.truncation_notice = result.responseArtifact
+      ? "Output shortened; the full response is saved at response_artifact.path. Read only the parts you need from that file."
+      : "Output shortened; ask a narrower question or raise AGY_MCP_MAX_OUTPUT_CHARS.";
+    for (const key of ["denied_actions", "denied_commands", "usage"]) {
       if (JSON.stringify(data).length <= limit) break;
       if (data[key] !== undefined) {
         delete data[key];

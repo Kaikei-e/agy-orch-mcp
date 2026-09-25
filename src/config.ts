@@ -17,6 +17,7 @@ export interface Config {
   maxOutputChars: number;
   maxBufferBytes: number;
   maxConcurrent: number;
+  contextRotateTokens: number;
   allowFullAutonomy: boolean;
   storageDir?: string;
   limits: ServerLimits;
@@ -144,6 +145,15 @@ export function loadConfig(
       67_108_864,
     ),
     maxConcurrent,
+    // No published degradation threshold exists for agy; long refactoring
+    // sessions started hallucinating around 3M cumulative tokens.
+    contextRotateTokens: integer(
+      env,
+      "AGY_MCP_CONTEXT_ROTATE_TOKENS",
+      2_000_000,
+      1,
+      1_000_000_000,
+    ),
     allowFullAutonomy: full === "true",
     storageDir:
       env.AGY_ORCH_STORAGE_DIR && env.AGY_ORCH_STORAGE_DIR.trim()

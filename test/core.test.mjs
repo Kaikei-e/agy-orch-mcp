@@ -35,6 +35,13 @@ test("configuration validates numeric limits and booleans", () => {
     /must not be blank/,
   );
   assert.equal(loadConfig({}).allowFullAutonomy, false);
+  for (const value of ["0", "-5", "1.5", "1000000001"]) {
+    assert.throws(
+      () => loadConfig({ AGY_MCP_CONTEXT_ROTATE_TOKENS: value }),
+      /AGY_MCP_CONTEXT_ROTATE_TOKENS must be an integer/,
+    );
+  }
+  assert.equal(loadConfig({}).contextRotateTokens, 2_000_000);
 });
 
 test("configuration validates AGY_MCP_DEFAULT_MODEL", () => {

@@ -9,7 +9,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     process.stdout.write(
-      `agy-orch-mcp ${version}\n\nUsage: agy-orch-mcp [--help | --version | --doctor]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace and CLI flags without starting a model turn.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL, AGY_MCP_MAX_CONCURRENT (default 4, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_ALLOW_FULL_AUTONOMY.\nSee https://github.com/Kaikei-e/agy-orch-mcp for setup.\n`,
+      `agy-orch-mcp ${version}\n\nUsage: agy-orch-mcp [--help | --version | --doctor]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace and CLI flags without starting a model turn.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL, AGY_MCP_MAX_CONCURRENT (default 4, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_CONTEXT_ROTATE_TOKENS, AGY_MCP_ALLOW_FULL_AUTONOMY.\nSee https://github.com/Kaikei-e/agy-orch-mcp for setup.\n`,
     );
     return;
   }

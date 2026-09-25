@@ -50,7 +50,8 @@
   - `full`: CLI に `--dangerously-skip-permissions` を渡します。サーバー環境で `AGY_MCP_ALLOW_FULL_AUTONOMY=true` が設定されていない限り拒否されます。
 - `AGY_MCP_ALLOWED_ROOT` を設定した場合、指定ルート配下の正規化パスのみをワークスペースとして許可します。これは**ワークスペースの選択のみを制限**するものであり、子プロセスのファイルシステムアクセスやネットワークアクセスを隔離（サンドボックス化）するものではありません。
 - **ブリッジによるステータス分類**: 本ブリッジは CLI の出力エンベロープを解析し、適切なステータスに分類します：
-  - `agy` が `SUCCESS` ステータスを返しても `denied_actions` が含まれている場合、ブリッジは結果を `status: "PERMISSION_DENIED"` に分類し、具体的な案内を提供するとともに出力メタデータ内に `denied_actions` 一覧を保持します。
+  - `agy` が `SUCCESS` ステータスを返しても `denied_actions` が含まれている場合、ブリッジは結果を `status: "PERMISSION_DENIED"` に分類し、具体的な案内を提供するとともに出力メタデータ内に `denied_actions` 一覧を保持します。agy はアクション種別しか報告しないため、そのターンで拒否されたコマンドラインを agy の会話 transcript から読み取り `denied_commands` として返します。
+  - run / continue の結果には `context`（このサーバープロセスが観測した会話ごとのターン数と累積 `total_tokens`）が含まれます。`AGY_MCP_CONTEXT_ROTATE_TOKENS` を超えると `context.rotate_recommended` が `true` になり、ホストは劣化した会話を continue せず、簡潔な引き継ぎを付けた新しい `antigravity_run` を開始します。
   - `agy` が `SUCCESS` ステータスで空の応答本文を返した場合、ブリッジはこれを `status: "EMPTY_RESPONSE"` に分類し、再試行前にワークスペース内の変更（副作用）を確認するよう警告します。
   - _(注: これらは Antigravity CLI 自体が出力するステータスではなく、MCP ツールとしての安全な振る舞いを保証するために `agy-orch-mcp` ブリッジ層が付与する分類です)_。
 
@@ -78,7 +79,7 @@
 - 排他制御と上限は 1 つのサーバープロセス内で有効です。ワークスペースのファイル、認証情報、CLI の状態は共有されます。
 - 同時発行した呼び出しが実際に並列でサーバーに届くかはホストに依存します。`run` / `continue` は `readOnlyHint: false` のため Claude Code では 1 件ずつ実行され、Codex ではサーバー設定に `supports_parallel_tool_calls = true` を指定すると並列実行されます。コード変更の並列化には、1 回の呼び出し内で並列実行し各タスクを worktree で分離する `antigravity_batch` を優先してください（クリーンな Git ワークスペースが必要。サーバー上限を超える budget 値は自動クランプされます）。
 - `timeout_seconds` の既定値は 300 で、10〜3600 の整数を指定できます。ツールの期限が先に発効するよう、クライアント側のタイムアウトを少し長め（例: 3660 秒）に設定してください。
-- 応答文字数は `AGY_MCP_MAX_OUTPUT_CHARS`（既定 40000、ホスト負荷軽減のため 16000 推奨）で制限されます。結果が切り詰められた場合はメタデータの `truncated` フラグを確認し、判断前に範囲を絞った追加ターンを要求してください。
+- 応答文字数は `AGY_MCP_MAX_OUTPUT_CHARS`（既定 40000、ホスト負荷軽減のため 16000 推奨）で制限されます。応答本文が切り詰められた場合は全文を artifact store に保存し、その場所を `response_artifact.path` として返します。必要な部分だけをそのファイルから読んでください。
 - **`BUSY` への対処**: 短期間での連続再試行（リトライストーム）を避け、待機するか直列化して呼び出します。
 - **タイムアウトおよび空応答 (`EMPTY_RESPONSE`) への対処**: 再試行前に `git status` でワークスペース内の変更（副作用）を確認してください。
 - **`PERMISSION_DENIED` およびエラーへの対処**: 暗黙的にホスト側へ作業を巻き戻すのではなく、具体的なブロッカー（不足している権限設定など）をユーザーに報告します。
@@ -212,16 +213,17 @@ git status --short
 
 ## 設定一覧
 
-| 変数名                        | 既定値                     | 説明                                                                                       |
-| ----------------------------- | -------------------------- | ------------------------------------------------------------------------------------------ |
-| `AGY_MCP_BIN`                 | `agy`                      | CLI 実行ファイル名、または絶対パス・相対パス。                                             |
-| `AGY_MCP_DEFAULT_WORKSPACE`   | サーバー実行時ディレクトリ | 既定のワークスペース。                                                                     |
-| `AGY_MCP_ALLOWED_ROOT`        | 未設定                     | 選択可能なワークスペースを制限する正規化ルートディレクトリ。                               |
-| `AGY_MCP_DEFAULT_MODEL`       | 未設定                     | 任意の既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > CLI 既定値。 |
-| `AGY_MCP_MAX_CONCURRENT`      | `4`                        | 同時実行できる CLI プロセス数の上限（1〜32）。                                             |
-| `AGY_MCP_MAX_OUTPUT_CHARS`    | `40000`                    | MCP 結果の最大文字数（1024〜1000000、ホスト負荷軽減のため 16000 を推奨）。                 |
-| `AGY_MCP_MAX_BUFFER_BYTES`    | `8388608`                  | プロセスごとの stdout バッファ上限バイト数（1024〜67108864）。                             |
-| `AGY_MCP_ALLOW_FULL_AUTONOMY` | `false`                    | `true` に設定すると `autonomy: "full"` の呼び出しを許可。                                  |
+| 変数名                          | 既定値                     | 説明                                                                                                    |
+| ------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `AGY_MCP_BIN`                   | `agy`                      | CLI 実行ファイル名、または絶対パス・相対パス。                                                          |
+| `AGY_MCP_DEFAULT_WORKSPACE`     | サーバー実行時ディレクトリ | 既定のワークスペース。                                                                                  |
+| `AGY_MCP_ALLOWED_ROOT`          | 未設定                     | 選択可能なワークスペースを制限する正規化ルートディレクトリ。                                            |
+| `AGY_MCP_DEFAULT_MODEL`         | 未設定                     | 任意の既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > CLI 既定値。              |
+| `AGY_MCP_MAX_CONCURRENT`        | `4`                        | 同時実行できる CLI プロセス数の上限（1〜32）。                                                          |
+| `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                    | MCP 結果の最大文字数（1024〜1000000、ホスト負荷軽減のため 16000 を推奨）。                              |
+| `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                  | 会話ごとの累積 `total_tokens` がこの値に達すると `context.rotate_recommended` を返す（1〜1000000000）。 |
+| `AGY_MCP_MAX_BUFFER_BYTES`      | `8388608`                  | プロセスごとの stdout バッファ上限バイト数（1024〜67108864）。                                          |
+| `AGY_MCP_ALLOW_FULL_AUTONOMY`   | `false`                    | `true` に設定すると `autonomy: "full"` の呼び出しを許可。                                               |
 
 ## 開発
 

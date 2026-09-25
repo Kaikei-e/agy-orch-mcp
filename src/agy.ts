@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Config } from "./config.js";
 import { ProcessRunner } from "./process.js";
 import type { ArtifactStore } from "./artifacts/store.js";
+import { readDeniedCommands } from "./transcript.js";
 
 export interface RunOptions {
   prompt: string;
@@ -28,12 +29,20 @@ export interface RunResult {
   error?: string;
   conversationId?: string;
   deniedActions?: unknown[];
+  deniedCommands?: string[];
   usage?: Record<string, unknown>;
   durationSec?: number;
   stderr?: string;
   rawStdout?: string;
   runId?: string;
   traceId?: string;
+  context?: {
+    turns: number;
+    cumulative_total_tokens: number;
+    rotate_recommended: boolean;
+    advice?: string;
+  };
+  responseArtifact?: { id: string; path: string };
   recoveryPointer?: {
     run_id: string;
     manifest_artifact_id: string;
@@ -137,6 +146,20 @@ export function buildArgs(options: RunOptions): string[] {
   return args;
 }
 
+// agy tells the model not to rephrase a denied command, so a retry only
+// succeeds when the follow-up names a concrete permitted alternative.
+function deniedGuidance(commands: string[] | undefined): string {
+  const listed = commands?.length
+    ? ` Denied commands: ${commands.map((command) => `\`${command}\``).join(", ")}.`
+    : "";
+  return (
+    `agy reported denied actions under headless permission handling.${listed} ` +
+    "Review side effects with git status, then either continue this conversation stating the permitted alternative " +
+    '(e.g. "X is unavailable; use Y instead"), or add the command prefix to permissions.allow ' +
+    'in ~/.gemini/antigravity-cli/settings.json (e.g. "command(bun)") before retrying.'
+  );
+}
+
 export async function runAgy(
   options: RunOptions,
   config: Config,
@@ -178,6 +201,7 @@ export async function runAgy(
 
   let pending = "";
   let lastProgress = 0;
+  const startedAt = Date.now();
 
   const rawStdout: string[] = [];
   const rawStderr: string[] = [];
@@ -218,6 +242,10 @@ export async function runAgy(
   });
 
   const parsed = parseAgyOutput(processResult.stdout);
+  const deniedCommands =
+    parsed.deniedActions?.length && parsed.conversationId
+      ? readDeniedCommands(parsed.conversationId, startedAt)
+      : undefined;
   let status = processResult.failure ?? parsed.status;
   let error = processResult.error ?? parsed.error;
   if (!processResult.failure) {
@@ -226,16 +254,14 @@ export async function runAgy(
         "agy did not return a recognized result envelope. Check authentication, workspace trust, and CLI version.";
     else if (status === "SUCCESS" && parsed.deniedActions?.length) {
       status = "PERMISSION_DENIED";
-      error ??=
-        "agy reported denied actions. Review the requested permissions before retrying.";
+      error ??= deniedGuidance(deniedCommands);
     } else if (status === "SUCCESS" && !parsed.response.trim()) {
       status = "EMPTY_RESPONSE";
       error ??=
         "agy reported success with an empty response. Review the conversation before retrying; the task may have had side effects.";
     }
     if (parsed.deniedActions?.length && status !== "PERMISSION_DENIED")
-      error ??=
-        "agy reported denied actions. Review the requested permissions before retrying.";
+      error ??= deniedGuidance(deniedCommands);
     if (processResult.exitCode !== 0)
       error ??= `agy exited with code ${processResult.exitCode ?? "unknown"}`;
     if (status !== "SUCCESS") error ??= `agy ended with status ${status}`;
@@ -325,6 +351,7 @@ export async function runAgy(
     exitCode: processResult.exitCode,
     conversationId: parsed.conversationId,
     deniedActions: parsed.deniedActions,
+    ...(deniedCommands?.length ? { deniedCommands } : {}),
     usage: parsed.usage,
     durationSec: parsed.durationSec,
     stderr: processResult.stderr,

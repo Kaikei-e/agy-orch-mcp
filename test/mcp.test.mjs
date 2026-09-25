@@ -270,8 +270,15 @@ test("validation, policy, and workspace failures are returned as tool errors", a
 });
 
 test("progress notifications and bounded tool results survive the MCP boundary", async (t) => {
-  const pair = await connected({ AGY_MCP_MAX_OUTPUT_CHARS: "1024" });
-  t.after(() => closePair(pair));
+  const storage = mkdtempSync(path.join(os.tmpdir(), "agy-orch-store-"));
+  const pair = await connected({
+    AGY_MCP_MAX_OUTPUT_CHARS: "1024",
+    AGY_ORCH_STORAGE_DIR: storage,
+  });
+  t.after(async () => {
+    await closePair(pair);
+    rmSync(storage, { recursive: true, force: true });
+  });
   const progress = [];
   const result = await pair.client.callTool(
     {
@@ -295,6 +302,71 @@ test("progress notifications and bounded tool results survive the MCP boundary",
   assert.equal(largeValue.ok, true);
   assert.equal(largeValue.truncated, true);
   assert.ok(large.content[0].text.length <= 1_024);
+  assert.match(largeValue.truncation_notice, /response_artifact\.path/);
+  assert.ok(largeValue.response_artifact.path.startsWith(storage));
+  assert.equal(
+    readFileSync(largeValue.response_artifact.path, "utf8"),
+    "語".repeat(80_000),
+  );
+});
+
+test("denied commands are recovered from the agy transcript with actionable guidance", async (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "agy-orch-home-"));
+  const pair = await connected({ HOME: home, AGY_ORCH_STORAGE_DIR: home });
+  t.after(async () => {
+    await closePair(pair);
+    rmSync(home, { recursive: true, force: true });
+  });
+  const value = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: { prompt: "denied-command", timeout_seconds: 10 },
+    }),
+  );
+  assert.equal(value.status, "PERMISSION_DENIED");
+  // Denials recorded before this run belong to earlier turns.
+  assert.deepEqual(value.denied_commands, ["git ls-tree HEAD"]);
+  assert.match(value.error, /`git ls-tree HEAD`/);
+  assert.match(value.error, /permitted alternative/);
+  assert.match(value.error, /permissions\.allow/);
+});
+
+test("conversations past the token threshold recommend a fresh run", async (t) => {
+  const pair = await connected({ AGY_MCP_CONTEXT_ROTATE_TOKENS: "80" });
+  t.after(() => closePair(pair));
+  const first = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: { prompt: "hello", timeout_seconds: 10 },
+    }),
+  );
+  assert.deepEqual(first.context, {
+    turns: 1,
+    cumulative_total_tokens: 42,
+    rotate_recommended: false,
+  });
+  const second = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_continue",
+      arguments: {
+        prompt: "hello",
+        conversation_id: first.conversation_id,
+        timeout_seconds: 10,
+      },
+    }),
+  );
+  assert.equal(second.ok, true);
+  assert.equal(second.context.turns, 2);
+  assert.equal(second.context.cumulative_total_tokens, 84);
+  assert.equal(second.context.rotate_recommended, true);
+  assert.match(second.context.advice, /new antigravity_run/);
+  const other = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: { prompt: "hello", timeout_seconds: 10 },
+    }),
+  );
+  assert.equal(other.context.turns, 1);
 });
 
 test(

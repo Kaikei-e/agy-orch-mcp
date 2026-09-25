@@ -21,6 +21,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- `PERMISSION_DENIED` results now include `denied_commands`, recovered from the agy conversation transcript, and guidance to continue with a named permitted alternative or extend `permissions.allow`.
+- Run/continue results report per-conversation `context` usage and recommend a fresh `antigravity_run` once cumulative tokens exceed `AGY_MCP_CONTEXT_ROTATE_TOKENS` (default 2,000,000).
+- Truncated responses are saved in full to the artifact store and referenced by `response_artifact`.
 - MCP initialization instructions and tool descriptions providing default delegation guidance for client hosts.
 - Configurable default model via `AGY_MCP_DEFAULT_MODEL`, with precedence (per-call `model` argument > `AGY_MCP_DEFAULT_MODEL` > CLI default).
 - Bridge error classification converting CLI output with denied actions into `PERMISSION_DENIED` and empty success responses into `EMPTY_RESPONSE`.
