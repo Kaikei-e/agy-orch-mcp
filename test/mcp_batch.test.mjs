@@ -625,3 +625,57 @@ test("MCP call: batch tool emits progress notifications when progressToken is su
     "At least one progress notification must have a non-empty message",
   );
 });
+
+test("MCP call: concurrent antigravity_batch calls on shared storageDir isolate worktrees and succeed in parallel", async (t) => {
+  const repoDir = mkdtempSync(
+    path.join(os.tmpdir(), "agy-git-parallel-batch-"),
+  );
+  const baseRev = initGitRepo(repoDir);
+
+  const pair = createTestClient({
+    AGY_MCP_ENABLE_BATCH: "true",
+    AGY_MCP_DEFAULT_WORKSPACE: repoDir,
+    AGY_MCP_ALLOWED_ROOT: repoDir,
+    AGY_MCP_MAX_CONCURRENT: "8",
+  });
+
+  t.after(() => {
+    closeClient(pair);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+    } catch {}
+  });
+
+  await pair.client.connect(pair.transport);
+
+  const makeBatchCall = (label, taskPrompt) =>
+    pair.client.callTool({
+      name: "antigravity_batch",
+      arguments: {
+        schema_version: "1",
+        workspace: { root: repoDir, base_revision: baseRev },
+        tasks: [
+          {
+            id: `task-${label}`,
+            objective: taskPrompt,
+            scope: { include: ["src/**"] },
+            owns: ["src/index.js"],
+          },
+        ],
+      },
+    });
+
+  const [res1, res2] = await Promise.all([
+    makeBatchCall("1", "Task 1"),
+    makeBatchCall("2", "Task 2"),
+  ]);
+
+  assert.equal(res1.isError, false, "First parallel batch call must succeed");
+  assert.equal(res2.isError, false, "Second parallel batch call must succeed");
+  assert.equal(res1.structuredContent?.status, "succeeded");
+  assert.equal(res2.structuredContent?.status, "succeeded");
+  assert.notEqual(
+    res1.structuredContent?.run_id,
+    res2.structuredContent?.run_id,
+  );
+});

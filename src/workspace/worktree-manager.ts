@@ -11,6 +11,7 @@ export interface WorktreeManagerOptions {
 }
 
 export class WorktreeManager {
+  private static readonly repoLocks = new Map<string, Promise<unknown>>();
   private sessionDir: string;
   private readonly ownedWorktrees = new Set<string>();
 
@@ -26,12 +27,39 @@ export class WorktreeManager {
     }
 
     if (storageDir) {
-      // Validate provided storageDir
+      // Validate provided storageDir; scope per runId unless already scoped so
+      // concurrent batch runs sharing AGY_ORCH_STORAGE_DIR never collide.
       const resolved = path.resolve(storageDir);
-      this.sessionDir = resolved;
+      this.sessionDir =
+        path.basename(resolved) === runId
+          ? resolved
+          : path.join(resolved, "worktrees", runId);
     } else {
       // Default: Private session directory outside source working tree, distinct from artifact stores
       this.sessionDir = path.join(os.tmpdir(), "agy-orch-worktrees", runId);
+    }
+  }
+
+  private async withRepoWorktreeLock<T>(fn: () => Promise<T>): Promise<T> {
+    const key = this.repo.getCanonicalRoot();
+    const prev = WorktreeManager.repoLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = prev.then(
+      () => gate,
+      () => gate,
+    );
+    WorktreeManager.repoLocks.set(key, tail);
+    await prev.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (WorktreeManager.repoLocks.get(key) === tail) {
+        WorktreeManager.repoLocks.delete(key);
+      }
     }
   }
 
@@ -111,11 +139,13 @@ export class WorktreeManager {
 
     await fsp.mkdir(taskDir, { recursive: true });
 
-    // Execute git worktree add with --detach
-    const res = await this.repo.exec(
-      ["worktree", "add", "--detach", worktreePath, baseRevision],
-      undefined,
-      { signal: options?.signal },
+    // Execute git worktree add with --detach serialized per repository
+    const res = await this.withRepoWorktreeLock(() =>
+      this.repo.exec(
+        ["worktree", "add", "--detach", worktreePath, baseRevision],
+        undefined,
+        { signal: options?.signal },
+      ),
     );
     if (res.exitCode !== 0) {
       throw new Error(
@@ -156,10 +186,12 @@ export class WorktreeManager {
 
     await fsp.mkdir(path.dirname(worktreePath), { recursive: true });
 
-    const res = await this.repo.exec(
-      ["worktree", "add", "--detach", worktreePath, baseRevision],
-      undefined,
-      { signal: options?.signal },
+    const res = await this.withRepoWorktreeLock(() =>
+      this.repo.exec(
+        ["worktree", "add", "--detach", worktreePath, baseRevision],
+        undefined,
+        { signal: options?.signal },
+      ),
     );
     if (res.exitCode !== 0) {
       throw new Error(`Failed to create integration worktree: ${res.stderr}`);
@@ -188,19 +220,21 @@ export class WorktreeManager {
       throw err;
     }
 
-    // Attempt git worktree remove
-    const res = await this.repo.exec(
-      ["worktree", "remove", "--force", worktreePath],
-      undefined,
-      { signal: options?.signal },
-    );
+    // Attempt git worktree remove serialized per repository
+    await this.withRepoWorktreeLock(async () => {
+      const res = await this.repo.exec(
+        ["worktree", "remove", "--force", worktreePath],
+        undefined,
+        { signal: options?.signal },
+      );
 
-    if (res.exitCode !== 0) {
-      // Try worktree prune if remove failed
-      await this.repo.exec(["worktree", "prune"], undefined, {
-        signal: options?.signal,
-      });
-    }
+      if (res.exitCode !== 0) {
+        // Try worktree prune if remove failed
+        await this.repo.exec(["worktree", "prune"], undefined, {
+          signal: options?.signal,
+        });
+      }
+    });
 
     // Only clean up filesystem directory if it was an owned path
     const resolved = path.resolve(worktreePath);

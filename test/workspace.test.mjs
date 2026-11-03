@@ -97,6 +97,30 @@ test("Workspace modules", async (t) => {
     await assert.rejects(fs.stat(wtPath));
     await wm.removeWorktree(intWtPath);
   });
+
+  await t.test(
+    "Concurrent WorktreeManager instances sharing storageDir isolate by runId and serialize git worktree locks",
+    async () => {
+      const sharedStorage = path.join(fixturesDir, "shared-storage");
+      await fs.rm(sharedStorage, { recursive: true, force: true });
+      const wmA = new WorktreeManager(repo, "run-a", sharedStorage);
+      const wmB = new WorktreeManager(repo, "run-b", sharedStorage);
+
+      const [wtA1, wtA2, wtB1, intA, intB] = await Promise.all([
+        wmA.createDetachedWorktree("task-1", baseRev),
+        wmA.createDetachedWorktree("task-2", baseRev),
+        wmB.createDetachedWorktree("task-1", baseRev),
+        wmA.createIntegrationWorktree(baseRev),
+        wmB.createIntegrationWorktree(baseRev),
+      ]);
+
+      assert.notStrictEqual(wmA.getSessionDir(), wmB.getSessionDir());
+      assert.notStrictEqual(wtA1, wtB1);
+      assert.notStrictEqual(intA, intB);
+
+      await Promise.all([wmA.cleanupAll(), wmB.cleanupAll()]);
+    },
+  );
 });
 
 test("Workspace advanced constraints", async (t) => {
