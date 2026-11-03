@@ -104,7 +104,7 @@ The server runs up to four `agy` commands concurrently by default (`AGY_MCP_MAX_
 ## Requirements
 
 - Node.js 22 or newer
-- pnpm 10 or newer (the repository pins pnpm 10.18.1)
+- pnpm 10 or newer (the repository pins pnpm 10.34.9)
 - An installed, authenticated Antigravity CLI available as `agy`, or an executable path supplied through `AGY_MCP_BIN`
 - A workspace that Antigravity is allowed to use
 
