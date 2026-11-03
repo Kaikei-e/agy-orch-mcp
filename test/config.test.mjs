@@ -14,8 +14,8 @@ test("loadConfig provides safe defaults with batch disabled and all tool surface
   assert.equal(config.fastModel, undefined);
   assert.equal(config.reasoningModel, undefined);
   assert.equal(config.allowFullAutonomy, false);
-  assert.equal(config.maxConcurrent, 4);
-  assert.equal(config.limits.maxParallelism, 4);
+  assert.equal(config.maxConcurrent, 8);
+  assert.equal(config.limits.maxParallelism, 8);
 });
 
 test("loadConfig respects AGY_MCP_ENABLE_BATCH=true while maintaining legacy compatibility", () => {

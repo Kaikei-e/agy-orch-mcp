@@ -88,7 +88,7 @@ When opted in via `AGY_MCP_ENABLE_BATCH=true` and `AGY_MCP_ENABLE_FETCH=true` (o
 
 ## Parallel Calls, Timeouts, and Bounded Recovery
 
-The server runs up to four `agy` commands concurrently by default (`AGY_MCP_MAX_CONCURRENT`).
+The server runs up to eight `agy` commands concurrently by default (`AGY_MCP_MAX_CONCURRENT`).
 
 - All commands, including `antigravity_models`, count toward the concurrency limit. Calls exceeding the limit immediately return `BUSY` and are **not queued**.
 - Independent tasks with different explicit `conversation_id` values or new runs can execute in parallel.
@@ -154,7 +154,7 @@ For Claude Code, add a stdio server entry to `.mcp.json` in your project root:
       "env": {
         "AGY_MCP_DEFAULT_WORKSPACE": "/absolute/path/to/workspace",
         "AGY_MCP_ALLOWED_ROOT": "/absolute/path/to",
-        "AGY_MCP_MAX_CONCURRENT": "4",
+        "AGY_MCP_MAX_CONCURRENT": "8",
         "AGY_MCP_MAX_OUTPUT_CHARS": "16000"
       }
     }
@@ -179,7 +179,7 @@ supports_parallel_tool_calls = true
 [mcp_servers.antigravity.env]
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"
 AGY_MCP_ALLOWED_ROOT = "/absolute/path/to"
-AGY_MCP_MAX_CONCURRENT = "4"
+AGY_MCP_MAX_CONCURRENT = "8"
 # Recommended compact output limit to protect host context:
 # AGY_MCP_MAX_OUTPUT_CHARS = "16000"
 # Optional default model slug discovered via `antigravity_models`:
@@ -194,7 +194,7 @@ Codex CLI registration can also be performed via:
 codex mcp add antigravity \
   --env "AGY_MCP_DEFAULT_WORKSPACE=/absolute/path/to/workspace" \
   --env "AGY_MCP_ALLOWED_ROOT=/absolute/path/to" \
-  --env "AGY_MCP_MAX_CONCURRENT=4" \
+  --env "AGY_MCP_MAX_CONCURRENT=8" \
   --env "AGY_MCP_MAX_OUTPUT_CHARS=16000" \
   -- "/absolute/path/to/node" "/absolute/path/to/agy-orch-mcp/dist/index.js"
 ```
@@ -241,7 +241,7 @@ When introducing these templates to an existing project, **merge** the rules int
 | `AGY_MCP_ENABLE_BATCH`          | `false`                  | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch)                     |
 | `AGY_MCP_ENABLE_FETCH`          | `false`                  | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch)                     |
 | `AGY_MCP_TOOL_SURFACE`          | `all`                    | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).                        |
-| `AGY_MCP_MAX_CONCURRENT`        | `4`                      | Maximum simultaneous CLI child processes (1–32).                                                                |
+| `AGY_MCP_MAX_CONCURRENT`        | `8`                      | Maximum simultaneous CLI child processes (1–32).                                                                |
 | `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                  | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).                       |
 | `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                | Cumulative `total_tokens` per conversation after which results set `context.rotate_recommended` (1–1000000000). |
 | `AGY_MCP_MAX_BUFFER_BYTES`      | `8388608`                | Maximum captured CLI stdout buffer per process before termination (1024–67108864).                              |

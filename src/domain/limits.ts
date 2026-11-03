@@ -21,7 +21,7 @@ export const DEFAULT_SERVER_LIMITS: ServerLimits = {
   maxWorkerCalls: 50,
   maxReplans: 2,
   maxRepairAttempts: 3,
-  maxParallelism: 4,
+  maxParallelism: 8,
   maxWallTimeMs: 7_200_000, // 2 hours
   maxArtifactBytesPerRun: 50 * 1024 * 1024, // 50MB
   maxDigestTokens: 2000,

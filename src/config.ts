@@ -112,7 +112,7 @@ export function loadConfig(
     );
   }
 
-  const maxConcurrent = integer(env, "AGY_MCP_MAX_CONCURRENT", 4, 1, 32);
+  const maxConcurrent = integer(env, "AGY_MCP_MAX_CONCURRENT", 8, 1, 32);
 
   const config: Config = {
     bin: bin.includes("/") || bin.includes("\\") ? path.resolve(cwd, bin) : bin,

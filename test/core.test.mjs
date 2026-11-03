@@ -77,8 +77,8 @@ test("configuration validates AGY_MCP_DEFAULT_MODEL", () => {
   );
 });
 
-test("parallelism defaults to four and accepts only bounded positive integers", () => {
-  assert.equal(loadConfig({}).maxConcurrent, 4);
+test("parallelism defaults to eight and accepts only bounded positive integers", () => {
+  assert.equal(loadConfig({}).maxConcurrent, 8);
   for (const value of ["1", "2", "32"])
     assert.equal(
       loadConfig({ AGY_MCP_MAX_CONCURRENT: value }).maxConcurrent,

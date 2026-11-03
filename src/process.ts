@@ -60,7 +60,7 @@ export class ProcessRunner {
   }>();
   private closed = false;
 
-  constructor(private readonly maxConcurrent = 4) {
+  constructor(private readonly maxConcurrent = 8) {
     if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1)
       throw new Error("maxConcurrent must be a positive integer");
   }

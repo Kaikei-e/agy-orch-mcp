@@ -16,7 +16,7 @@ supports_parallel_tool_calls = true
 [mcp_servers.antigravity.env]
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"
 AGY_MCP_ALLOWED_ROOT = "/absolute/path/to"
-AGY_MCP_MAX_CONCURRENT = "4"
+AGY_MCP_MAX_CONCURRENT = "8"
 # Recommended compact output limit (characters) to conserve host context window:
 # AGY_MCP_MAX_OUTPUT_CHARS = "16000"
 # Optional default model slug discovered via `antigravity_models`:

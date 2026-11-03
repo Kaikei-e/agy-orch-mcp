@@ -71,7 +71,7 @@
 
 ## 並列実行、タイムアウト、境界のあるエラー復旧
 
-既定では最大 4 件まで `agy` を並列実行できます（`AGY_MCP_MAX_CONCURRENT`）。
+既定では最大 8 件まで `agy` を並列実行できます（`AGY_MCP_MAX_CONCURRENT`）。
 
 - `antigravity_models` を含む全コマンドが同時実行数に数えられます。上限超過時は待機キューに入らず、**即座に `BUSY` を返します**。
 - 新規会話や異なる明示的な `conversation_id` のタスクは並列実行できます。
@@ -137,7 +137,7 @@ probe は返された会話に対して `run` と `continue` を実行します�
       "env": {
         "AGY_MCP_DEFAULT_WORKSPACE": "/absolute/path/to/workspace",
         "AGY_MCP_ALLOWED_ROOT": "/absolute/path/to",
-        "AGY_MCP_MAX_CONCURRENT": "4",
+        "AGY_MCP_MAX_CONCURRENT": "8",
         "AGY_MCP_MAX_OUTPUT_CHARS": "16000"
       }
     }
@@ -162,7 +162,7 @@ supports_parallel_tool_calls = true
 [mcp_servers.antigravity.env]
 AGY_MCP_DEFAULT_WORKSPACE = "/absolute/path/to/workspace"
 AGY_MCP_ALLOWED_ROOT = "/absolute/path/to"
-AGY_MCP_MAX_CONCURRENT = "4"
+AGY_MCP_MAX_CONCURRENT = "8"
 # ホストのコンテキスト節約のためコンパクトな出力上限（16000文字）を推奨:
 AGY_MCP_MAX_OUTPUT_CHARS = "16000"
 # antigravity_models で取得したモデル slug の既定値（任意）:
@@ -177,7 +177,7 @@ Codex CLI のコマンドによる登録：
 codex mcp add antigravity \
   --env "AGY_MCP_DEFAULT_WORKSPACE=/absolute/path/to/workspace" \
   --env "AGY_MCP_ALLOWED_ROOT=/absolute/path/to" \
-  --env "AGY_MCP_MAX_CONCURRENT=4" \
+  --env "AGY_MCP_MAX_CONCURRENT=8" \
   --env "AGY_MCP_MAX_OUTPUT_CHARS=16000" \
   -- "/absolute/path/to/node" "/absolute/path/to/agy-orch-mcp/dist/index.js"
 ```
@@ -219,7 +219,7 @@ git status --short
 | `AGY_MCP_DEFAULT_WORKSPACE`     | サーバー実行時ディレクトリ | 既定のワークスペース。                                                                                  |
 | `AGY_MCP_ALLOWED_ROOT`          | 未設定                     | 選択可能なワークスペースを制限する正規化ルートディレクトリ。                                            |
 | `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-argon-high`      | 既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-argon-high`。         |
-| `AGY_MCP_MAX_CONCURRENT`        | `4`                        | 同時実行できる CLI プロセス数の上限（1〜32）。                                                          |
+| `AGY_MCP_MAX_CONCURRENT`        | `8`                        | 同時実行できる CLI プロセス数の上限（1〜32）。                                                          |
 | `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                    | MCP 結果の最大文字数（1024〜1000000、ホスト負荷軽減のため 16000 を推奨）。                              |
 | `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                  | 会話ごとの累積 `total_tokens` がこの値に達すると `context.rotate_recommended` を返す（1〜1000000000）。 |
 | `AGY_MCP_MAX_BUFFER_BYTES`      | `8388608`                  | プロセスごとの stdout バッファ上限バイト数（1024〜67108864）。                                          |
