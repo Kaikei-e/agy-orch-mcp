@@ -3,7 +3,7 @@ import * as z from "zod/v4";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { listModels, runAgy, type RunOptions, type RunResult } from "./agy.js";
-import { resolveWorkspace, type Config } from "./config.js";
+import { DEFAULT_MODEL, resolveWorkspace, type Config } from "./config.js";
 import { ProcessRunner } from "./process.js";
 import { toToolResult } from "./result.js";
 import { version } from "./version.js";
@@ -48,7 +48,7 @@ const commonInput = {
     }, "model must not start with a dash, contain whitespace, or NUL")
     .optional()
     .describe(
-      "Model slug from antigravity_models. Omit to use server default (AGY_MCP_DEFAULT_MODEL) or CLI default.",
+      `Model slug from antigravity_models. Omit to use server default (AGY_MCP_DEFAULT_MODEL, default ${DEFAULT_MODEL}).`,
     ),
   mode: z
     .enum(["plan", "accept-edits"])

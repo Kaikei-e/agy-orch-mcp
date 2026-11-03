@@ -639,11 +639,11 @@ test("MCP env-model precedence on antigravity_run and antigravity_continue", asy
   );
   assert.ok(!contOverrideArgv.includes("default-test-model"));
 
-  // Pair without AGY_MCP_DEFAULT_MODEL
+  // Pair without AGY_MCP_DEFAULT_MODEL uses built-in default (gemini-4-argon-high)
   const pairWithoutDefault = await connected();
   t.after(() => closePair(pairWithoutDefault));
 
-  // 5. No --model passed on antigravity_run when neither set
+  // 5. Built-in default model passed on antigravity_run when neither env nor argument set
   const runNoModel = await pairWithoutDefault.client.callTool({
     name: "antigravity_run",
     arguments: { prompt: "run-no-model", workspace: root, timeout_seconds: 10 },
@@ -651,9 +651,13 @@ test("MCP env-model precedence on antigravity_run and antigravity_continue", asy
   const runNoModelVal = valueOf(runNoModel);
   assert.equal(runNoModelVal.ok, true);
   const runNoModelArgv = JSON.parse(runNoModelVal.response).argv;
-  assert.ok(!runNoModelArgv.includes("--model"));
+  assert.ok(runNoModelArgv.includes("--model"));
+  assert.equal(
+    runNoModelArgv[runNoModelArgv.indexOf("--model") + 1],
+    "gemini-4-argon-high",
+  );
 
-  // 6. No --model passed on antigravity_continue when neither set
+  // 6. Built-in default model passed on antigravity_continue when neither env nor argument set
   const contNoModel = await pairWithoutDefault.client.callTool({
     name: "antigravity_continue",
     arguments: {
@@ -666,7 +670,11 @@ test("MCP env-model precedence on antigravity_run and antigravity_continue", asy
   const contNoModelVal = valueOf(contNoModel);
   assert.equal(contNoModelVal.ok, true);
   const contNoModelArgv = JSON.parse(contNoModelVal.response).argv;
-  assert.ok(!contNoModelArgv.includes("--model"));
+  assert.ok(contNoModelArgv.includes("--model"));
+  assert.equal(
+    contNoModelArgv[contNoModelArgv.indexOf("--model") + 1],
+    "gemini-4-argon-high",
+  );
 });
 
 test("SUCCESS with denied_actions returns PERMISSION_DENIED across MCP, preserving response, conversation_id, denied_actions", async (t) => {

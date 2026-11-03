@@ -7,6 +7,8 @@ import { DEFAULT_SERVER_LIMITS } from "./domain/limits.js";
 
 export type ToolSurface = "all" | "batch";
 
+export const DEFAULT_MODEL = "gemini-4-argon-high";
+
 export interface Config {
   bin: string;
   defaultWorkspace: string;
@@ -122,7 +124,7 @@ export function loadConfig(
         ? undefined
         : directory(path.resolve(cwd, env.AGY_MCP_ALLOWED_ROOT)),
     defaultModel: validateModelSlug(
-      env.AGY_MCP_DEFAULT_MODEL,
+      env.AGY_MCP_DEFAULT_MODEL ?? DEFAULT_MODEL,
       "AGY_MCP_DEFAULT_MODEL",
     ),
     fastModel: validateModelSlug(env.AGY_MCP_FAST_MODEL, "AGY_MCP_FAST_MODEL"),

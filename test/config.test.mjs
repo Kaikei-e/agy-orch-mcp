@@ -10,6 +10,7 @@ test("loadConfig provides safe defaults with batch disabled and all tool surface
   assert.equal(config.enableBatch, false);
   assert.equal(config.enableFetch, false);
   assert.equal(config.toolSurface, "all");
+  assert.equal(config.defaultModel, "gemini-4-argon-high");
   assert.equal(config.fastModel, undefined);
   assert.equal(config.reasoningModel, undefined);
   assert.equal(config.allowFullAutonomy, false);

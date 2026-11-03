@@ -33,7 +33,7 @@
 
 1. ツール呼び出し時（`antigravity_run` / `antigravity_continue`）に明示された `model` 引数
 2. サーバー環境変数 `AGY_MCP_DEFAULT_MODEL`（設定されている場合）
-3. インストール済み `agy` CLI 自体の既定モデル（省略時）
+3. サーバー組み込みの既定モデル（`gemini-4-argon-high`）
 
 利用可能なモデル slug は `antigravity_models` で事前に取得し、キャッシュまたは設定に利用してください。
 
@@ -218,7 +218,7 @@ git status --short
 | `AGY_MCP_BIN`                   | `agy`                      | CLI 実行ファイル名、または絶対パス・相対パス。                                                          |
 | `AGY_MCP_DEFAULT_WORKSPACE`     | サーバー実行時ディレクトリ | 既定のワークスペース。                                                                                  |
 | `AGY_MCP_ALLOWED_ROOT`          | 未設定                     | 選択可能なワークスペースを制限する正規化ルートディレクトリ。                                            |
-| `AGY_MCP_DEFAULT_MODEL`         | 未設定                     | 任意の既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > CLI 既定値。              |
+| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-argon-high`      | 既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-argon-high`。         |
 | `AGY_MCP_MAX_CONCURRENT`        | `4`                        | 同時実行できる CLI プロセス数の上限（1〜32）。                                                          |
 | `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                    | MCP 結果の最大文字数（1024〜1000000、ホスト負荷軽減のため 16000 を推奨）。                              |
 | `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                  | 会話ごとの累積 `total_tokens` がこの値に達すると `context.rotate_recommended` を返す（1〜1000000000）。 |

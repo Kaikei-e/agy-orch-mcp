@@ -66,6 +66,7 @@ test("configuration validates AGY_MCP_DEFAULT_MODEL", () => {
       /must not contain whitespace, NUL, or start with a dash/,
     );
   }
+  assert.equal(loadConfig({}).defaultModel, "gemini-4-argon-high");
   assert.equal(
     loadConfig({ AGY_MCP_DEFAULT_MODEL: "test-model" }).defaultModel,
     "test-model",

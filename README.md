@@ -35,7 +35,7 @@ Model selection resolves in the following order:
 
 1. The explicit `model` argument provided in the MCP tool call (`antigravity_run` or `antigravity_continue`).
 2. The server environment variable `AGY_MCP_DEFAULT_MODEL` (if set and non-empty).
-3. The default model configured within the installed `agy` CLI itself (when omitted).
+3. The server built-in default model (`gemini-4-argon-high`).
 
 Query available model slugs using `antigravity_models`, then cache or specify the desired slug.
 
@@ -235,7 +235,7 @@ When introducing these templates to an existing project, **merge** the rules int
 | `AGY_MCP_BIN`                   | `agy`                    | CLI executable name, or an absolute or relative path to the executable.                                         |
 | `AGY_MCP_DEFAULT_WORKSPACE`     | server current directory | Default workspace directory.                                                                                    |
 | `AGY_MCP_ALLOWED_ROOT`          | unset                    | Optional canonical root restricting permitted workspaces.                                                       |
-| `AGY_MCP_DEFAULT_MODEL`         | unset                    | Optional default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > CLI.                      |
+| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-argon-high`    | Default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-argon-high`.             |
 | `AGY_MCP_FAST_MODEL`            | unset                    | Optional fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.                                 |
 | `AGY_MCP_REASONING_MODEL`       | unset                    | Optional reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.                         |
 | `AGY_MCP_ENABLE_BATCH`          | `false`                  | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch)                     |
