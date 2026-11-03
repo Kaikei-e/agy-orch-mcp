@@ -213,6 +213,18 @@ test("MCP discovery: AGY_MCP_TOOL_SURFACE=batch exposes minimal batch and fetch 
   const toolNames = list.tools.map((tool) => tool.name).sort();
 
   assert.deepEqual(toolNames, ["antigravity_batch", "antigravity_fetch"]);
+  for (const tool of list.tools) {
+    assert.equal(
+      tool.annotations?.readOnlyHint,
+      true,
+      `${tool.name} must advertise readOnlyHint: true for parallel host dispatch`,
+    );
+    assert.equal(
+      tool.annotations?.destructiveHint,
+      false,
+      `${tool.name} must advertise destructiveHint: false`,
+    );
+  }
 });
 
 test("MCP call: invalid preflight rejects upfront with zero worker spawn marker check", async (t) => {

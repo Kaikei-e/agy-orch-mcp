@@ -97,11 +97,24 @@ test("legacy and modern MCP negotiation expose all three tools", async (t) => {
     ),
   );
   const legacyToolList = (await legacy.client.listTools()).tools;
+  for (const tool of legacyToolList) {
+    assert.equal(
+      tool.annotations?.readOnlyHint,
+      true,
+      `${tool.name} must set readOnlyHint: true so Claude Code schedules parallel calls`,
+    );
+    assert.equal(
+      tool.annotations?.destructiveHint,
+      false,
+      `${tool.name} must set destructiveHint: false for parallel host execution`,
+    );
+  }
   const runDesc = legacyToolList.find(
     (tool) => tool.name === "antigravity_run",
   )?.description;
   assert.match(runDesc, /Policy:/);
-  assert.match(runDesc, /concurrently/);
+  assert.match(runDesc, /single turn/);
+  assert.match(runDesc, /parallel/);
   const continueDesc = legacyToolList.find(
     (tool) => tool.name === "antigravity_continue",
   )?.description;

@@ -257,9 +257,15 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
 
   let activeBatchCalls = 0;
 
+  // Claude Code maps MCP `annotations.readOnlyHint` directly to its internal
+  // `isConcurrencySafe()` check and serializes any tool where `readOnlyHint` is
+  // false; OpenAI Codex combines `supports_parallel_tool_calls = true` with
+  // non-destructive tool annotations to avoid serializing on approval prompts.
+  // Workspace and permission safety are enforced by `mode`, `autonomy`,
+  // `allowedRoot`, per-conversation locks, and isolated batch worktrees.
   const annotations = {
-    readOnlyHint: false,
-    destructiveHint: true,
+    readOnlyHint: true,
+    destructiveHint: false,
     idempotentHint: false,
     openWorldHint: true,
   };
@@ -269,7 +275,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
       "antigravity_run",
       {
         title: "Run Antigravity",
-        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Use a new run for every independent task instead of continuing an unrelated conversation. Returns a conversation_id for follow-up. Up to ${config.maxConcurrent} agy calls can run concurrently per server; excess calls return BUSY. Whether simultaneous calls actually run in parallel depends on the MCP client. Parallel calls share workspace files, Antigravity account and quota; for parallel code changes prefer antigravity_batch when it is enabled.`,
+        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Use a new run for every independent task instead of continuing an unrelated conversation. Returns a conversation_id for follow-up. Emit multiple antigravity_run tool calls in a single turn to execute independent read-only or disjoint-scope tasks in parallel (up to ${config.maxConcurrent} concurrent agy calls per server; excess calls return BUSY; in Codex also set supports_parallel_tool_calls = true). Parallel calls share workspace files, Antigravity account and quota; for parallel code changes prefer antigravity_batch when it is enabled.`,
         inputSchema: z.object(commonInput).strict(),
         annotations,
       },
@@ -280,7 +286,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
       "antigravity_continue",
       {
         title: "Continue Antigravity",
-        description: `Policy: ${policy} Follow up in an existing Antigravity conversation identified by conversation_id. Use only for a direct continuation of that conversation's task; start independent tasks with antigravity_run. Different conversation_ids can run in parallel; simultaneous continuations of the same ID return BUSY. Use the same workspace as the original turn. When a result reports context.rotate_recommended, start a new antigravity_run with a compact handoff instead of continuing.`,
+        description: `Policy: ${policy} Follow up in an existing Antigravity conversation identified by conversation_id. Use only for a direct continuation of that conversation's task; start independent tasks with antigravity_run. Different conversation_ids can be emitted in the same turn to run in parallel; simultaneous continuations of the same ID return BUSY. Use the same workspace as the original turn. When a result reports context.rotate_recommended, start a new antigravity_run with a compact handoff instead of continuing.`,
         inputSchema: z
           .object({ ...commonInput, conversation_id: z.uuid() })
           .strict(),
@@ -347,12 +353,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         title: "Execute Antigravity task DAG batch",
         description: batchDescription,
         inputSchema: batchRequestSchema,
-        annotations: {
-          readOnlyHint: false,
-          destructiveHint: false,
-          idempotentHint: false,
-          openWorldHint: true,
-        },
+        annotations,
       },
       async (args, context) => {
         if (activeBatchCalls >= config.maxConcurrent) {
