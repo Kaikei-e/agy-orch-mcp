@@ -37,11 +37,11 @@
 - **並列化の使い分け (タスク種別で選ぶ)**:
   - **コード変更を伴う並列タスク**: `antigravity_batch` を使います。各タスクが独立した git worktree で実行され、`owns` の検証を経て `final.patch` として返るため、ワークスペースの競合が起きません。ホストのツール並列実行仕様にも依存しません（1 回のツール呼び出し内でサーバーが並列実行します）。実行前にワークスペースがクリーン（未コミット変更がない状態）であることを確認してください。サーバー上限を超える budget 値は自動クランプされ、進捗通知（ハートビート）により長時間バッチでも切断されません。
   - **単発タスク・同一会話の続き**: `antigravity_run` → ID 明示の `antigravity_continue`。
-  - **読み取り専用の調査の並列化**: 異なる会話の `antigravity_run` を同時に発行します（サーバー既定で最大 8 件同時実行）。ただし同時発行が実際に並列実行されるかはホストに依存します（下記）。
+  - **読み取り専用の調査や非重複スコープの並列化**: 異なる会話の `antigravity_run`（または異なる `conversation_id` の `antigravity_continue`）を同一ターン内で同時に発行します（サーバー既定で最大 8 件同時実行）。
 - **ホスト別の並列実行仕様**:
-  - `antigravity_run` / `antigravity_continue` は `readOnlyHint: false` のため、ホストは既定で 1 件ずつ実行します。
-  - **Claude Code**: 同一メッセージ内の同時発行でも直列実行されます。並列化したい場合は `antigravity_batch` を使うか、サブエージェントごとに `antigravity_run` を 1 件ずつ発行します。
-  - **Codex CLI / IDE**: MCP サーバー設定に `supports_parallel_tool_calls = true` を指定すると並列実行されます。同一会話への重複呼び出しはサーバー側ロックが `BUSY` で拒否します。
+  - `antigravity_run` / `antigravity_continue` / `antigravity_batch` は、MCP ツールアノテーションとして `readOnlyHint: true, destructiveHint: false` を宣言しており、ホスト側スケジューラによる同一ターン内の並列ディスパッチを有効化しています（ワークスペースや権限の安全境界は `mode`、`autonomy`、`allowedRoot`、会話ロック、`antigravity_batch` の分離 worktree で保護されます）。
+  - **Claude Code**: MCP の `annotations.readOnlyHint: true` を内部の `isConcurrencySafe()` 判定にマッピングするため、同一メッセージ内で複数の `antigravity_run` / `antigravity_continue`（別会話 ID）を発行するとそのまま並列実行されます（サブエージェントからの並列呼び出しや `antigravity_batch` も利用可能）。
+  - **Codex CLI / IDE**: MCP サーバー設定に `supports_parallel_tool_calls = true` を指定すると、同一ターン内の複数ツール呼び出しが並列実行されます。同一会話への重複呼び出しや上限超過はサーバー側ロックが `BUSY` で即座に拒否します。
 - **モデルの選定とキャッシュ**:
   - 利用可能なモデル slug は事前に `antigravity_models` で確認・キャッシュして使用するか、サーバー環境変数 `AGY_MCP_DEFAULT_MODEL` / CLI 既定値を利用し、モデル選定のための無駄なターン消費を抑えます。
 

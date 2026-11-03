@@ -10,7 +10,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Renamed tool and repository to `agy-orch-mcp`.
 - **Breaking:** `antigravity_continue` now requires `conversation_id`. Implicit latest-conversation continuation (`--continue`), which took exclusive access to the server and blocked every other call, has been removed.
-- Tool descriptions and delegation guidance now route independent tasks to new `antigravity_run` calls and parallel code changes to `antigravity_batch`, and document host-specific parallelism (Claude Code serializes non-read-only MCP tools; Codex needs `supports_parallel_tool_calls = true`).
+- Tool descriptions, MCP `ToolAnnotations` (`readOnlyHint: true`, `destructiveHint: false`), and delegation guidance now enable direct parallel tool execution in both Claude Code (`isConcurrencySafe()`) and OpenAI Codex (`supports_parallel_tool_calls = true`), while routing independent tasks to new `antigravity_run` calls and parallel code changes to `antigravity_batch`.
+- Raised default `AGY_MCP_MAX_CONCURRENT` (and default `maxParallelism` cap) from 4 to 8, and set the built-in default model to `gemini-4-argon-high`.
+- Scoped `WorktreeManager` session directories by `runId` when `AGY_ORCH_STORAGE_DIR` is configured and serialized per-repository `git worktree` add/remove operations to prevent lock contention during parallel batch execution.
 - Elevated `antigravity_batch` server default limits (`maxWallTimeMs = 7_200_000`, `maxWorkerCalls = 50`, `maxParallelism = min(16, AGY_MCP_MAX_CONCURRENT)`).
 - Batch budget parameters exceeding server limits are now automatically clamped and surfaced in `budget_adjustments` rather than rejected.
 - Structural validation errors in `antigravity_batch` (owns vs. scope containment, DAG cycles, task/gate limits) are now aggregated into a single descriptive message.

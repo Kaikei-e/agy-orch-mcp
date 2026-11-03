@@ -77,7 +77,10 @@
 - 新規会話や異なる明示的な `conversation_id` のタスクは並列実行できます。
 - 同じ会話 ID を指定した継続呼び出しは排他制御され、後からの呼び出しは即座に `BUSY` を返します。
 - 排他制御と上限は 1 つのサーバープロセス内で有効です。ワークスペースのファイル、認証情報、CLI の状態は共有されます。
-- 同時発行した呼び出しが実際に並列でサーバーに届くかはホストに依存します。`run` / `continue` は `readOnlyHint: false` のため Claude Code では 1 件ずつ実行され、Codex ではサーバー設定に `supports_parallel_tool_calls = true` を指定すると並列実行されます。コード変更の並列化には、1 回の呼び出し内で並列実行し各タスクを worktree で分離する `antigravity_batch` を優先してください（クリーンな Git ワークスペースが必要。サーバー上限を超える budget 値は自動クランプされます）。
+- 全 MCP ツール（`antigravity_run`、`antigravity_continue`、`antigravity_models`、`antigravity_batch`、`antigravity_fetch`）は `annotations.readOnlyHint: true` および `annotations.destructiveHint: false` を宣言しており、ホスト側のツールスケジューラによる同一ターン内の並列ディスパッチを有効化しています：
+  - **Claude Code**: MCP の `annotations.readOnlyHint: true` を内部の `isConcurrencySafe()` 判定にマッピングするため、同一メッセージ内で複数の `antigravity_run` や異なる `conversation_id` の `antigravity_continue` を発行するとそのまま並列実行されます。
+  - **OpenAI Codex CLI / IDE**: サーバー設定に `supports_parallel_tool_calls = true` を指定すると、同一ターン内の複数ツール呼び出しが並列実行されます。
+  - 同一リポジトリに対するコード変更の並列化には、1 回の呼び出し内で並列実行し各タスクを Git worktree で分離する `antigravity_batch` を優先してください（クリーンな Git ワークスペースが必要。サーバー上限を超える budget 値は自動クランプされます）。
 - `timeout_seconds` の既定値は 300 で、10〜3600 の整数を指定できます。ツールの期限が先に発効するよう、クライアント側のタイムアウトを少し長め（例: 3660 秒）に設定してください。
 - 応答文字数は `AGY_MCP_MAX_OUTPUT_CHARS`（既定 40000、ホスト負荷軽減のため 16000 推奨）で制限されます。応答本文が切り詰められた場合は全文を artifact store に保存し、その場所を `response_artifact.path` として返します。必要な部分だけをそのファイルから読んでください。
 - **`BUSY` への対処**: 短期間での連続再試行（リトライストーム）を避け、待機するか直列化して呼び出します。

@@ -2,11 +2,14 @@
 command = "node"
 args = ["/absolute/path/to/agy-orch-mcp/dist/index.js"]
 enabled_tools = ["antigravity_batch", "antigravity_fetch"]
+startup_timeout_sec = 20
 tool_timeout_sec = 1860
+supports_parallel_tool_calls = true
 
 [mcp_servers.agy_orch.env]
 AGY_MCP_ENABLE_BATCH = "true"
 AGY_MCP_TOOL_SURFACE = "batch"
+AGY_MCP_MAX_CONCURRENT = "8"
 
 [mcp_servers.agy_orch.tools.antigravity_batch]
 output_token_limit = 1800

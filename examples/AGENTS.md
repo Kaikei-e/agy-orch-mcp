@@ -30,10 +30,10 @@ When delegating a task to `antigravity_run`, structure the prompt with:
 - **Choosing a parallel strategy** (by task type, not by host):
   - Parallel code changes: use `antigravity_batch`. Each task runs in an isolated Git worktree with validated `owns`, and results return as `final.patch`, so tasks cannot collide in the workspace. Parallelism happens inside a single tool call and does not depend on the host. Requires a clean Git working tree; budget values exceeding server limits are automatically clamped and reported.
   - Single tasks and direct follow-ups: `antigravity_run`, then `antigravity_continue` with an explicit ID.
-  - Parallel read-only investigations: issue separate `antigravity_run` calls. Whether they actually overlap depends on the host (see below).
-- **Host parallelism**: `antigravity_run` and `antigravity_continue` declare `readOnlyHint: false`, so hosts execute them one at a time by default.
-  - Claude Code: simultaneous calls in one message still run serially. For parallelism, use `antigravity_batch` or give each subagent a single `antigravity_run`.
-  - Codex CLI / IDE: set `supports_parallel_tool_calls = true` on the MCP server entry to run them concurrently.
+  - Parallel read-only investigations or disjoint-scope tasks: issue multiple `antigravity_run` calls (or `antigravity_continue` calls with distinct `conversation_id`s) in a single turn (up to 8 concurrent calls by default).
+- **Host parallelism**: `antigravity_run`, `antigravity_continue`, and `antigravity_batch` advertise `readOnlyHint: true` and `destructiveHint: false` in their MCP `ToolAnnotations` so host tool schedulers can dispatch multiple calls concurrently (while server-side safety is enforced via `mode`, `autonomy`, `allowedRoot`, per-conversation locks, and isolated worktrees).
+  - Claude Code: maps `annotations.readOnlyHint: true` to `isConcurrencySafe()`, so multiple `antigravity_run` or distinct-ID `antigravity_continue` calls in one assistant message execute in parallel (as do subagents or `antigravity_batch`).
+  - Codex CLI / IDE: set `supports_parallel_tool_calls = true` on the MCP server entry in `config.toml` to dispatch multiple tool calls concurrently in a single turn.
 - **Concurrency**: Overlapping calls with identical conversation IDs or concurrent calls exceeding capacity are immediately rejected with `BUSY` (calls are not queued).
 - **Handling BUSY**: The caller must wait or reschedule calls serially; do not trigger rapid retry storms.
 - **Handling Timeouts / Empty Responses**: Inspect workspace side effects (`git status`) before re-issuing prompts.
