@@ -91,6 +91,158 @@ if (args[0] === "--version") {
   });
 } else if (prompt === "malformed") {
   console.log("Authentication required");
+} else if (prompt === "ledger") {
+  emit({ event: "init", conversation_id: id });
+  emit({
+    event: "step_update",
+    step_update: {
+      conversation_id: id,
+      step_index: 1,
+      state: "DONE",
+      step_type: "agent_response",
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        thinking_tokens: 10,
+        cache_read_tokens: 0,
+        total_tokens: 150,
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 2,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "echo ok" },
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 2,
+      state: "DONE",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.02,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "echo ok" },
+        output: "Command exited with code 0.\n\nCommand output:\nok\r\n",
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 3,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "ls /nope" },
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 3,
+      state: "DONE",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.07,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "ls /nope" },
+        output:
+          "Command exited with code 1.\n\nCommand output:\nls: cannot access '/nope': No such file or directory\r\n",
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 4,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "go -C alt-backend/app test ./..." },
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 4,
+      state: "DONE",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.5,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "go -C alt-backend/app test ./..." },
+        output: `Tool is running as a background task with task id: ${id}/task-213\nTask Description: go -C alt-backend/app test ./...\nTask logs are available at: file:///tmp/task-213.log`,
+      },
+    },
+  });
+  emit({
+    event: "result",
+    result: {
+      conversation_id: id,
+      status: "SUCCESS",
+      response: "ledger complete",
+      duration_seconds: 0.6,
+      usage: { total_tokens: 150 },
+    },
+  });
+} else if (prompt === "denied-tail") {
+  emit({ event: "init", conversation_id: id });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 1,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "rm -rf /tmp/nope" },
+      },
+    },
+  });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 1,
+      state: "DONE",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.01,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "rm -rf /tmp/nope" },
+      },
+    },
+  });
+  emit({
+    event: "result",
+    result: {
+      conversation_id: id,
+      status: "SUCCESS",
+      response: "",
+      duration_seconds: 0.1,
+      denied_actions: [{ action: "command", display_name: "RunCommand" }],
+    },
+  });
 } else {
   emit({ event: "init", conversation_id: id });
   emit({
