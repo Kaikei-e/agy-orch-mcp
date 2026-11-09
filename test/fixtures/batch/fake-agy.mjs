@@ -20,11 +20,21 @@ import { setTimeout as delay } from "node:timers/promises";
 const args = process.argv.slice(2);
 const value = (flag) => args[args.indexOf(flag) + 1];
 const prompt = value("-p") ?? "";
-const id = args.includes("--conversation")
-  ? value("--conversation")
-  : randomUUID();
+const hasConversation = args.includes("--conversation");
+const id = hasConversation ? value("--conversation") : randomUUID();
 const cwd = process.cwd();
 const emit = (object) => process.stdout.write(`${JSON.stringify(object)}\n`);
+
+function resolveEditFile(promptText) {
+  if (process.env.BATCH_FIXTURE_EDIT_FILE) {
+    return process.env.BATCH_FIXTURE_EDIT_FILE;
+  }
+  const ownedMatch = /^  - ([^\s*]+)$/m.exec(promptText);
+  if (ownedMatch) return ownedMatch[1];
+  const statusMatch = /^(?:\?\?| M|M |A )\s+([^\s]+)$/m.exec(promptText);
+  if (statusMatch) return statusMatch[1];
+  return undefined;
+}
 
 // Handle version/help
 if (args[0] === "--version") {
@@ -38,11 +48,71 @@ if (args[0] === "--version") {
   process.exit(0);
 }
 
+const isPrintTimeoutOnce =
+  process.env.BATCH_FIXTURE_PRINT_TIMEOUT === "true" ||
+  process.env.BATCH_FIXTURE_PRINT_TIMEOUT === "once" ||
+  process.env.BATCH_FIXTURE_RESUME === "true" ||
+  prompt.includes("PRINT_TIMEOUT_ONCE");
+const isPrintTimeoutAlways =
+  process.env.BATCH_FIXTURE_PRINT_TIMEOUT === "always" ||
+  prompt.includes("PRINT_TIMEOUT_ALWAYS");
+
 // Handle timeout scenario
 if (process.env.BATCH_FIXTURE_TIMEOUT === "true") {
   process.on("SIGTERM", () => {});
   emit({ event: "init", conversation_id: id });
   setInterval(() => {}, 1_000);
+} else if (isPrintTimeoutAlways || (isPrintTimeoutOnce && !hasConversation)) {
+  emit({ event: "init", conversation_id: id });
+  const editFile = resolveEditFile(prompt);
+  if (editFile) {
+    const fullPath = join(cwd, editFile);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, "// partial work from first turn\n");
+  }
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 1,
+      state: "DONE",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.02,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "pnpm test" },
+        output: "Command exited with code 0.\n\nCommand output:\nok\n",
+      },
+    },
+  });
+  emit({
+    event: "result",
+    result: {
+      status: "ERROR",
+      response: "Partial progress before 15-minute cap",
+      conversation_id: id,
+      error: `print timeout after 900s with the turn still in progress; the response is partial; terminated ${id}/task-1 (sleep 30)`,
+      finished_reason: "print_timeout",
+      duration_seconds: 900,
+      usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+    },
+  });
+  process.stderr.write(
+    `AGY_ERROR: ${JSON.stringify({
+      short_error: "print timeout",
+      status: "DEADLINE_EXCEEDED",
+      retryable: false,
+      reason: "print_timeout",
+      tasks: [
+        {
+          id: `${id}/task-1`,
+          description: "sleep 30",
+          log_uri: "file:///tmp/task-1.log",
+        },
+      ],
+    })}\n`,
+  );
+  process.exit(3);
 } else {
   emit({ event: "init", conversation_id: id });
 
@@ -69,9 +139,9 @@ if (process.env.BATCH_FIXTURE_TIMEOUT === "true") {
   }
 
   // Perform edits if instructed
-  const editFile = process.env.BATCH_FIXTURE_EDIT_FILE;
+  const editFile = resolveEditFile(prompt);
   const editContent =
-    process.env.BATCH_FIXTURE_EDIT_CONTENT ?? "edited by fake agy";
+    process.env.BATCH_FIXTURE_EDIT_CONTENT ?? "edited by fake agy\n";
 
   if (editFile) {
     const fullPath = join(cwd, editFile);
@@ -91,10 +161,11 @@ if (process.env.BATCH_FIXTURE_TIMEOUT === "true") {
         workspace: cwd,
         editFile,
         editContent,
+        conversationId: id,
       }),
       conversation_id: id,
       duration_seconds: 0.01,
-      usage: { total_tokens: 10 },
+      usage: { input_tokens: 6, output_tokens: 4, total_tokens: 10 },
     },
   });
 }

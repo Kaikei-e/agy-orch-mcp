@@ -10,6 +10,7 @@ import { toToolResult } from "../dist/result.js";
 import {
   createAntigravityWorker,
   buildWorkerPrompt,
+  buildResumePrompt,
 } from "../dist/workers/antigravity-worker.js";
 import {
   classifyFailure,
@@ -657,5 +658,95 @@ test("Routing Policy - Model Resolution & Tier Selection", () => {
   assert.equal(
     selectInitialWorkerTier(createMockTask({ worker: { tier: "reasoning" } })),
     "reasoning",
+  );
+});
+
+test("Routing Policy - resolveWorkerModel omits effort when model slug ends with effort suffix", () => {
+  const defaultArgonConfig = loadConfig({
+    AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+    AGY_MCP_DEFAULT_MODEL: "gemini-4-argon-high",
+  });
+
+  const argonFast = resolveWorkerModel("fast", defaultArgonConfig);
+  assert.equal(argonFast.model, "gemini-4-argon-high");
+  assert.equal(argonFast.effort, undefined);
+
+  for (const suffix of ["-low", "-medium", "-high", "-xhigh", "-max"]) {
+    const res = resolveWorkerModel(
+      "fast",
+      defaultArgonConfig,
+      `custom-model${suffix}`,
+    );
+    assert.equal(res.model, `custom-model${suffix}`);
+    assert.equal(res.effort, undefined);
+  }
+
+  const plainReasoning = resolveWorkerModel(
+    "reasoning",
+    defaultArgonConfig,
+    "plain-slug",
+  );
+  assert.equal(plainReasoning.model, "plain-slug");
+  assert.equal(plainReasoning.effort, "high");
+
+  const plainFast = resolveWorkerModel(
+    "fast",
+    defaultArgonConfig,
+    "plain-slug",
+  );
+  assert.equal(plainFast.model, "plain-slug");
+  assert.equal(plainFast.effort, "low");
+});
+
+test("Antigravity Worker - buildResumePrompt formatting and truncation bounds", () => {
+  const verifiedOutputs = Array.from({ length: 12 }, (_, idx) => ({
+    step_index: idx + 1,
+    command: `cmd-${idx + 1}`,
+    status: idx % 2 === 0 ? "completed" : "failed",
+    exit_code: idx % 2 === 0 ? 0 : 1,
+  }));
+  const longNote = "A".repeat(1600) + "TAIL_SHOULD_BE_DROPPED";
+  const manyChanges = Array.from(
+    { length: 35 },
+    (_, idx) => ` M src/file-${idx + 1}.ts`,
+  );
+
+  const resumePrompt = buildResumePrompt({
+    ok: false,
+    status: "TIMEOUT",
+    response: "",
+    exitCode: 3,
+    conversationId: "conv-123",
+    resumable: true,
+    verifiedOutputs,
+    partialResponse: longNote,
+    workspaceChanges: manyChanges,
+  });
+
+  assert.ok(
+    resumePrompt.startsWith(
+      "Your previous turn was cut off by the 15-minute turn cap. Continue the same task in the same worktree.",
+    ),
+  );
+  // First 2 of 12 verifiedOutputs omitted, last 10 (cmd-3..cmd-12) included
+  assert.ok(!resumePrompt.includes("exit=0 cmd-1\n"));
+  assert.ok(!resumePrompt.includes("exit=1 cmd-2\n"));
+  assert.ok(resumePrompt.includes("completed exit=0 cmd-3"));
+  assert.ok(resumePrompt.includes("failed exit=1 cmd-12"));
+
+  // partialResponse capped to 1500 chars
+  assert.ok(resumePrompt.includes("Last progress note:\n" + "A".repeat(1500)));
+  assert.ok(!resumePrompt.includes("A".repeat(1501)));
+  assert.ok(!resumePrompt.includes("TAIL_SHOULD_BE_DROPPED"));
+
+  // workspaceChanges capped to 30 lines
+  assert.ok(resumePrompt.includes("Uncommitted changes:\n M src/file-1.ts"));
+  assert.ok(resumePrompt.includes(" M src/file-30.ts"));
+  assert.ok(!resumePrompt.includes(" M src/file-31.ts"));
+
+  assert.ok(
+    resumePrompt.endsWith(
+      "Finish the remaining work in small verified steps, then end with your final summary.",
+    ),
   );
 });
