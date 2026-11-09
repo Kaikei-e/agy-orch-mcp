@@ -42,21 +42,28 @@
 5. **Gate Command Specifications**:
    - `gate.command` requires an explicit argv array (`string[]`), never an unparsed shell command string, preventing shell injection and unmonitored subshells.
    - `GateRunner.runGate` supports typed `signal?: AbortSignal` (6th argument) and terminates process groups promptly upon cancellation without false-passed gates.
-6. **Bounded Recovery, Budgets & Clamping**:
-   - Execution loops are bounded by `budget.max_worker_calls` (default 50), `max_repair_attempts` (default 3), `max_replans` (default 2), and a strict `wall_time_ms` deadline (default 7,200,000ms / 2h). Over-limit budget values are automatically clamped and reported via `budget_adjustments`. Long batches emit progress heartbeats when a progressToken is supplied.
-7. **Safe Fetch Pointers**:
-   - `antigravity_fetch` retrieves structured slices of prior run artifacts using logical selectors (`task:<id>:stdout`, `task:<id>:stderr`, `gate:<id>:stdout`, `gate:<id>:stderr`, `manifest`, `digest`) or internal artifact IDs with cursor-based pagination (`byte_offset`). Raw filesystem paths are never accepted.
+6. **Bounded Recovery, Budgets, Clamping & 15-Minute Resumable Turn Cap**:
+   - Individual `antigravity_run` / `antigravity_continue` turns are capped at 15 minutes (`timeout_seconds` default and max `900`). `agy` ends the turn itself via `--print-timeout <N>s`, and the bridge hard-kills the process tree 60 seconds later. A cut-off turn returns `status: "TIMEOUT"` with `resumable: true`, `conversation_id`, `partial_response`, `verified_outputs`, `workspace_changes`, `terminated_tasks`, and `turn_seconds` (`duration_seconds` from `agy` is cumulative per conversation; `turn_seconds` is this turn).
+   - Batch execution loops are bounded by `budget.max_worker_calls` (default 50), `max_repair_attempts` (default 3), `max_replans` (default 2), and a strict `wall_time_ms` deadline (default 7,200,000ms / 2h). Per-turn batch worker timeout is capped at `900,000` ms (15 min); a worker turn that hits the cap is resumed automatically in the same worktree and conversation with a bridge-written resume prompt, counted against `max_worker_calls`. Effort-suffixed model slugs (e.g. `gemini-4-argon-high`) are resolved without passing a conflicting `--effort low` flag. Over-limit budget values are automatically clamped and reported via `budget_adjustments`. Long batches emit progress heartbeats when a `progressToken` is supplied.
+7. **Safe Fetch Pointers & Shortened Response Navigation**:
+   - `antigravity_fetch` retrieves structured slices of prior run artifacts using logical selectors (`task:<id>:stdout`, `task:<id>:stderr`, `task:<id>:patch`, `gate:<id>:stdout`, `gate:<id>:stderr`, `manifest`, `digest`, `request`, `plan`, `events`) or internal artifact IDs with cursor-based pagination (`byte_offset`). Raw filesystem paths are never accepted.
+   - When a legacy run/continue response exceeds `AGY_MCP_MAX_OUTPUT_CHARS`, the full text is saved to `response_artifact.path` and accompanied by `response_outline` (Markdown heading levels and `start_line`–`end_line` ranges) and a `resource_link` content item (`file://` URI to `response.txt`).
 8. **Preflight Token Budget Capacity & Envelope Trimming**:
    - Upfront preflight capacity validation rejects impossible `max_tokens` before any worker spawn, store initialization, or worktree creation.
    - Deterministic trimmer accounts for the entire MCP `CallToolResult` envelope (`content` + `structuredContent` + `isError`) using `estimateTokenCount`.
    - `CAPACITY_EXCEEDED` errors preserve the `run_id` and `recovery_pointer`.
-9. **Opt-In Surface & Model Routing**:
-   - Legacy tools (`antigravity_run`, `antigravity_continue`, `antigravity_models`) remain default.
-   - Batch and fetch features are strictly opt-in via `AGY_MCP_ENABLE_BATCH=true` and `AGY_MCP_ENABLE_FETCH=true`.
-   - `AGY_MCP_TOOL_SURFACE=batch` exposes a minimal tool surface (`antigravity_batch`, `antigravity_fetch`) to conserve client context windows.
-10. **Raw CLI Stdout Fidelity in Batch Worker Artifacts**:
-    - `WorkerExecutionResult` preserves physical raw CLI stdout (including stream-json events, metadata envelopes, and trailing newlines) and stderr for artifact logging, while parsed `runResult.response` continues to drive failure classification and legacy tool responses.
-    - Legacy `toToolResult` strictly omits internal `rawStdout` from both text and structured content, guaranteeing zero leakage to standard MCP clients.
+9. **Opt-In Surface, Parallelism, Queueing & MCP Tasks**:
+   - Legacy tools (`antigravity_run`, `antigravity_continue`, `antigravity_models`) remain default; batch and fetch features are opt-in via `AGY_MCP_ENABLE_BATCH=true` and `AGY_MCP_ENABLE_FETCH=true` (or `AGY_MCP_TOOL_SURFACE=batch`).
+   - Tools advertise `readOnlyHint: true` and `destructiveHint: false` so Claude Code runs multiple calls in one message in parallel without relay subagents (and auto-backgrounds calls running longer than 2 minutes via `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`).
+   - `queue_timeout_seconds` (`0`–`900`) waits in a FIFO queue with position progress notifications (`queue_wait_seconds` in result) instead of returning `BUSY`.
+   - MCP Tasks extension (`io.modelcontextprotocol/tasks`, revision `2026-07-28`) is enabled by default (`AGY_MCP_TASKS=auto`; `AGY_MCP_TASKS=off` disables); clients advertising it receive a task handle and poll `tasks/get` (verified with SDK clients in tests; Claude Code documents support from v2.1.304 for main-conversation calls).
+10. **Machine-Extracted Evidence, Structured Handoffs & CLI Capture Fidelity**:
+    - `StreamLedger` extracts `verified_outputs` (`command`, `status` `completed` | `failed` | `denied` | `background` | `running`, `exit_code`, `output_tail`, `error`, `full_output_path`, `background_task_id`, `duration_seconds`) from the `agy` JSON stream so hosts can verify command execution without trusting model prose. `denied_commands` merges stream and transcript denials, including denials that only appear as the last tool call in `PLANNER_RESPONSE`.
+    - `return_mode: "structured"` passes `--json-schema` (`src/handoff-schema.ts`) and returns a parsed `handoff` object alongside `response`.
+    - `WorkerExecutionResult` preserves physical raw CLI stdout and stderr for batch artifact logging, while `toToolResult` strictly omits `rawStdout` from legacy MCP tool outputs.
+11. **Command Guard, Fixed Deny Rules, Preflight Warnings & Environment Isolation**:
+    - `agy-orch-mcp --install-guard` installs an env-gated (`AGY_ORCH_MCP_GUARD=1`) `PreToolUse` hook (`agy-orch-mcp-guard`) in `~/.gemini/config/hooks.json` (`--uninstall-guard` removes it; `AGY_MCP_GUARD=off` disables). It denies remote-changing `git`/`gh` commands (including via `sh -c`, `xargs`, `env` wrappers) and unquoted redirection/command substitution with actionable reasons, and returns `deny_unless_prior_grant` for everything else (never `"ask"`, which headless `agy` auto-approves; empty output abstains when `AGY_ORCH_MCP_GUARD` is unset). Fixed deny rules are also passed via `--settings`. `--doctor` reports guard status and a permissions audit (`high`/`medium`/`low`), and turns emit `preflight_warnings` for prompt commands that would be denied or when the guard hook is missing.
+    - `AGY_MCP_ENV_ISOLATION=full` (default) | `install` | `off` creates one directory per conversation under `AGY_MCP_ENV_ROOT` (`<XDG_STATE_HOME or ~/.local/state>/agy-orch/env`), reused on `continue`, pruned after 24h at startup, with polling enabled for file watchers (`CHOKIDAR_USEPOLLING=1`, `WATCHPACK_POLLING=true`).
 
 ---
 
