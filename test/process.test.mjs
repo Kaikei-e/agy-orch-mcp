@@ -352,3 +352,132 @@ test("hard process failures take precedence over denied actions", async (t) => {
   assert.equal(canceledResult.ok, false);
   assert.equal(canceledResult.status, "CANCELED");
 });
+
+test("env option merges over process.env while preserving NO_COLOR=1", async (t) => {
+  const runner = new ProcessRunner();
+  t.after(() => runner.close());
+  const result = await runner.run({
+    bin: process.execPath,
+    args: [
+      "-e",
+      "process.stdout.write(JSON.stringify({ custom: process.env.CUSTOM_TEST_VAR, noColor: process.env.NO_COLOR }))",
+    ],
+    cwd: process.cwd(),
+    timeoutMs: 5_000,
+    maxBufferBytes: 1_000_000,
+    env: { CUSTOM_TEST_VAR: "isolated-value", NO_COLOR: "0" },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.queuedMs, undefined);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    custom: "isolated-value",
+    noColor: "1",
+  });
+});
+
+test(
+  "FIFO queue ordering, position callbacks, abort while queued, and queuedMs",
+  { timeout: 8_000 },
+  async (t) => {
+    const [slot, first, second, third] = await barriers(t, 4);
+    const runner = new ProcessRunner(1);
+    t.after(() => runner.close());
+
+    const active = runner.run(options(slot.prompt));
+    await slot.ready();
+
+    const pos1 = [];
+    const pos2 = [];
+    const pos3 = [];
+    const abortSecond = new AbortController();
+
+    const q1 = runner.run(
+      options(first.prompt, {
+        queueTimeoutMs: 5_000,
+        onQueued: (p) => pos1.push(p),
+      }),
+    );
+    const q2 = runner.run(
+      options(second.prompt, {
+        queueTimeoutMs: 5_000,
+        signal: abortSecond.signal,
+        onQueued: (p) => pos2.push(p),
+      }),
+    );
+    const q3 = runner.run(
+      options(third.prompt, {
+        queueTimeoutMs: 5_000,
+        onQueued: (p) => pos3.push(p),
+      }),
+    );
+
+    assert.deepEqual(pos1, [1]);
+    assert.deepEqual(pos2, [2]);
+    assert.deepEqual(pos3, [3]);
+
+    // Aborting the middle waiter updates the third waiter's position to 2
+    abortSecond.abort();
+    const res2 = await q2;
+    assert.equal(res2.failure, "CANCELED");
+    assert.equal(typeof res2.queuedMs, "number");
+    assert.deepEqual(pos1, [1]);
+    assert.deepEqual(pos3, [3, 2]);
+
+    // Releasing the active slot starts q1 and advances q3 to position 1
+    slot.release();
+    const activeRes = await active;
+    assert.equal(activeRes.exitCode, 0);
+    assert.equal(activeRes.queuedMs, undefined);
+
+    await first.ready();
+    assert.deepEqual(pos3, [3, 2, 1]);
+
+    first.release();
+    const res1 = await q1;
+    assert.equal(res1.exitCode, 0);
+    assert.equal(typeof res1.queuedMs, "number");
+    assert.ok(res1.queuedMs >= 0);
+
+    await third.ready();
+    third.release();
+    const res3 = await q3;
+    assert.equal(res3.exitCode, 0);
+    assert.equal(typeof res3.queuedMs, "number");
+  },
+);
+
+test(
+  "queue timeout returns BUSY with wait message, same-lockKey stays immediate BUSY, and close cancels waiters",
+  { timeout: 8_000 },
+  async (t) => {
+    const [slot] = await barriers(t, 1);
+    const runner = new ProcessRunner(1);
+    t.after(() => runner.close());
+
+    const active = runner.run(options(slot.prompt, { lockKey: "conv-1" }));
+    await slot.ready();
+
+    // Same lockKey is immediate BUSY even with queueTimeoutMs
+    const sameKey = await runner.run(
+      options("ok", { lockKey: "conv-1", queueTimeoutMs: 5_000 }),
+    );
+    assert.equal(sameKey.failure, "BUSY");
+    assert.match(sameKey.error, /conversation is already running/);
+
+    // Queue timeout
+    const timedOut = await runner.run(options("ok", { queueTimeoutMs: 100 }));
+    assert.equal(timedOut.failure, "BUSY");
+    assert.equal(
+      timedOut.error,
+      "Waited 0.1 seconds for a free agy slot; all 1 slots stayed busy.",
+    );
+    assert.equal(typeof timedOut.queuedMs, "number");
+
+    // Waiter canceled when runner.close() is called
+    const waiter = runner.run(options("ok", { queueTimeoutMs: 5_000 }));
+    await runner.close();
+    const waiterRes = await waiter;
+    assert.equal(waiterRes.failure, "CANCELED");
+    assert.equal((await active).failure, "CANCELED");
+  },
+);
