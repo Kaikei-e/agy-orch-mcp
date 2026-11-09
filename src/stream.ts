@@ -52,6 +52,12 @@ function extractOutputTail(output: string): string | undefined {
   return lines.length > MAX_TAIL_CHARS ? lines.slice(-MAX_TAIL_CHARS) : lines;
 }
 
+function extractErrorMessage(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  const obj = asRecord(value);
+  return typeof obj?.message === "string" ? obj.message : undefined;
+}
+
 function hasCommandDenial(deniedActions: unknown): boolean {
   if (!Array.isArray(deniedActions)) return false;
   for (const item of deniedActions) {
@@ -179,13 +185,12 @@ export class StreamLedger {
       return;
     }
 
-    if (state !== "DONE") return;
+    if (state !== "DONE" && state !== "ERROR") return;
 
     this.provisionalDenied.delete(stepIndex);
     const rawOutput =
       typeof toolInfo?.output === "string" ? toolInfo.output : undefined;
-    const rawError =
-      typeof toolInfo?.error === "string" ? toolInfo.error : undefined;
+    const rawError = extractErrorMessage(toolInfo?.error);
 
     if (rawOutput !== undefined && rawOutput.length > 0) {
       const output = rawOutput.replace(/\r/g, "");
