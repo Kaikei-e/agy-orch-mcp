@@ -310,6 +310,125 @@ test("StreamLedger classifies tool_info.error and resolves provisional denials o
   assert.deepEqual(ledger.deniedCommands(), ["git push", "curl example.com"]);
 });
 
+test("StreamLedger handles state ERROR and object tool_info.error with message", () => {
+  const ledger = new StreamLedger();
+
+  ledger.push({
+    event: "step_update",
+    step_update: {
+      step_index: 2,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "rg turn>model ." },
+      },
+    },
+  });
+  ledger.push({
+    event: "step_update",
+    step_update: {
+      step_index: 2,
+      state: "ERROR",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.09,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "rg turn>model ." },
+        error: {
+          type: "TOOL_ERROR",
+          message:
+            "tool call denied by pre-tool hook: Redirection and command substitution are unavailable here. ...",
+        },
+      },
+    },
+  });
+
+  ledger.push({
+    event: "step_update",
+    step_update: {
+      step_index: 8,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "nproc" },
+      },
+    },
+  });
+  ledger.push({
+    event: "step_update",
+    step_update: {
+      step_index: 8,
+      state: "ERROR",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.11,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "nproc" },
+        error: {
+          type: "TOOL_ERROR",
+          message:
+            'permission check failed for unsandboxed "nproc": Permission denied for unsandboxed(nproc). ...',
+        },
+      },
+    },
+  });
+
+  ledger.push({
+    event: "step_update",
+    step_update: {
+      step_index: 10,
+      state: "ERROR",
+      step_type: "tool",
+      tool_name: "run_command",
+      duration_seconds: 0.05,
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "false" },
+        error: {
+          type: "TOOL_ERROR",
+          message: "execution failed: working directory does not exist",
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(ledger.commands(), [
+    {
+      step_index: 2,
+      command: "rg turn>model .",
+      status: "denied",
+      exit_code: null,
+      error:
+        "tool call denied by pre-tool hook: Redirection and command substitution are unavailable here. ...",
+      duration_seconds: 0.09,
+    },
+    {
+      step_index: 8,
+      command: "nproc",
+      status: "denied",
+      exit_code: null,
+      error:
+        'permission check failed for unsandboxed "nproc": Permission denied for unsandboxed(nproc). ...',
+      duration_seconds: 0.11,
+    },
+    {
+      step_index: 10,
+      command: "false",
+      status: "failed",
+      exit_code: null,
+      error: "execution failed: working directory does not exist",
+      duration_seconds: 0.05,
+    },
+  ]);
+  assert.deepEqual(ledger.deniedCommands(), ["rg turn>model .", "nproc"]);
+});
+
 test("StreamLedger keeps provisional denial when result reports command denied_actions", () => {
   const ledger = new StreamLedger();
   ledger.push({
