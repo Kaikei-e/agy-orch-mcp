@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
@@ -355,7 +359,9 @@ test("conversations past the token threshold recommend a fresh run", async (t) =
   );
   assert.deepEqual(first.context, {
     turns: 1,
+    turn_total_tokens: 42,
     cumulative_total_tokens: 42,
+    rotate_threshold_tokens: 80,
     rotate_recommended: false,
   });
   const second = valueOf(
@@ -370,7 +376,9 @@ test("conversations past the token threshold recommend a fresh run", async (t) =
   );
   assert.equal(second.ok, true);
   assert.equal(second.context.turns, 2);
+  assert.equal(second.context.turn_total_tokens, 42);
   assert.equal(second.context.cumulative_total_tokens, 84);
+  assert.equal(second.context.rotate_threshold_tokens, 80);
   assert.equal(second.context.rotate_recommended, true);
   assert.match(second.context.advice, /new antigravity_run/);
   const other = valueOf(
@@ -380,6 +388,8 @@ test("conversations past the token threshold recommend a fresh run", async (t) =
     }),
   );
   assert.equal(other.context.turns, 1);
+  assert.equal(other.context.turn_total_tokens, 42);
+  assert.equal(other.context.rotate_threshold_tokens, 80);
 });
 
 test(
@@ -756,4 +766,420 @@ test("SUCCESS with denied_actions returns PERMISSION_DENIED across MCP, preservi
   await delay(100);
   controller.abort();
   await assert.rejects(pendingCancel, /abort|cancel|closed/i);
+});
+
+test("timeout_seconds max 900 validation, default 900 --print-timeout, and policy text updates", async (t) => {
+  const pair = await connected();
+  t.after(() => closePair(pair));
+
+  const instructions = pair.client.getInstructions() ?? "";
+  assert.match(instructions, /15 minutes/);
+  assert.match(instructions, /resumable=true/);
+  assert.match(instructions, /partial_response/);
+  assert.match(instructions, /verified_outputs/);
+  assert.match(instructions, /workspace_changes/);
+  assert.match(instructions, /queue_timeout_seconds/);
+
+  const tools = (await pair.client.listTools()).tools;
+  for (const name of ["antigravity_run", "antigravity_continue"]) {
+    const tool = tools.find((item) => item.name === name);
+    assert.ok(tool);
+    assert.match(tool.description ?? "", /15 minutes/);
+    assert.match(tool.description ?? "", /resumable=true/);
+    assert.match(tool.description ?? "", /verified_outputs/);
+    assert.match(tool.description ?? "", /queue_timeout_seconds/);
+  }
+
+  // timeout_seconds: 901 rejected on antigravity_run and antigravity_continue
+  for (const toolName of ["antigravity_run", "antigravity_continue"]) {
+    let rejected;
+    try {
+      rejected = await pair.client.callTool({
+        name: toolName,
+        arguments: {
+          prompt: "ok",
+          timeout_seconds: 901,
+          ...(toolName === "antigravity_continue"
+            ? { conversation_id: "055a398f-db14-4c5f-abbb-1bf03f8120a7" }
+            : {}),
+        },
+      });
+    } catch (error) {
+      rejected = error;
+    }
+    if (rejected?.isError !== undefined) assert.equal(rejected.isError, true);
+    else
+      assert.match(
+        String(rejected?.message ?? rejected),
+        /900|invalid|validation/i,
+      );
+  }
+
+  // Default timeout_seconds is 900 and reaches --print-timeout 900s
+  const defaultRun = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: { prompt: "default-timeout", workspace: root },
+    }),
+  );
+  assert.equal(defaultRun.ok, true);
+  const argv = JSON.parse(defaultRun.response).argv;
+  assert.equal(argv[argv.indexOf("--print-timeout") + 1], "900s");
+});
+
+test(
+  "queue_timeout_seconds waits when AGY_MCP_MAX_CONCURRENT=1, emits position progress, and reports queue_wait_seconds",
+  { timeout: 10_000 },
+  async (t) => {
+    const temp = mkdtempSync(path.join(os.tmpdir(), "agy-orch-mcp-queue-"));
+    const pair = await connected({ AGY_MCP_MAX_CONCURRENT: "1" });
+    t.after(async () => {
+      await closePair(pair);
+      rmSync(temp, { recursive: true, force: true });
+    });
+
+    const gate = path.join(temp, "slot");
+    const first = pair.client.callTool({
+      name: "antigravity_run",
+      arguments: { prompt: `wait:${gate}`, timeout_seconds: 10 },
+    });
+    await waitFor(() => existsSync(`${gate}.ready`), 4_000);
+
+    const progress = [];
+    const second = pair.client.callTool(
+      {
+        name: "antigravity_run",
+        arguments: {
+          prompt: "queued-second",
+          timeout_seconds: 10,
+          queue_timeout_seconds: 10,
+        },
+      },
+      { onprogress: (event) => progress.push(event) },
+    );
+
+    await waitFor(
+      () =>
+        progress.some(
+          (event) => event.message === "Queued for an agy slot (position 1)",
+        ),
+      4_000,
+    );
+
+    writeFileSync(`${gate}.release`, "");
+    const firstVal = valueOf(await first);
+    assert.equal(firstVal.ok, true);
+    assert.equal(firstVal.queue_wait_seconds, undefined);
+
+    const secondVal = valueOf(await second);
+    assert.equal(secondVal.ok, true);
+    assert.equal(JSON.parse(secondVal.response).prompt, "queued-second");
+    assert.equal(typeof secondVal.queue_wait_seconds, "number");
+    assert.ok(secondVal.queue_wait_seconds >= 0);
+  },
+);
+
+test("return_mode structured passes --json-schema, keeps raw response, and populates handoff", async (t) => {
+  const pair = await connected();
+  t.after(() => closePair(pair));
+
+  const structuredRes = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: {
+        prompt: "handoff-ok",
+        workspace: root,
+        timeout_seconds: 10,
+        return_mode: "structured",
+      },
+    }),
+  );
+  assert.equal(structuredRes.ok, true);
+  assert.equal(typeof structuredRes.response, "string");
+  assert.deepEqual(JSON.parse(structuredRes.response), structuredRes.handoff);
+  assert.equal(structuredRes.handoff.summary, "completed task");
+  assert.deepEqual(structuredRes.handoff.changes, [
+    { path: "src/agy.ts", change: "wired run path" },
+  ]);
+
+  // Verify --json-schema flag was passed when return_mode is structured
+  const echoRes = valueOf(
+    await pair.client.callTool({
+      name: "antigravity_run",
+      arguments: {
+        prompt: "check-schema-flag",
+        workspace: root,
+        timeout_seconds: 10,
+        return_mode: "structured",
+      },
+    }),
+  );
+  assert.equal(echoRes.ok, true);
+  const argv = JSON.parse(echoRes.response).argv;
+  assert.ok(argv.includes("--json-schema"));
+  assert.equal(typeof echoRes.handoff_error, "string");
+});
+
+test("2026-07-28 client with tasks extension receives a task handle and tasks/get reaches completed with tool result", async (t) => {
+  const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
+  const CLIENT_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities";
+  const CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo";
+  const TASKS_EXTENSION_ID = "io.modelcontextprotocol/tasks";
+
+  const modernMeta = (withTasks = true) => ({
+    [PROTOCOL_VERSION_KEY]: "2026-07-28",
+    [CLIENT_INFO_KEY]: { name: "mcp-tasks-test-client", version: "1.0.0" },
+    [CLIENT_CAPS_KEY]: withTasks
+      ? { extensions: { [TASKS_EXTENSION_ID]: {} } }
+      : {},
+  });
+
+  const tempEnvRoot = mkdtempSync(
+    path.join(os.tmpdir(), "agy-orch-env-prune-"),
+  );
+  const staleDir = path.join(tempEnvRoot, "stale-conv");
+  const freshDir = path.join(tempEnvRoot, "fresh-conv");
+  mkdirSync(staleDir, { recursive: true });
+  mkdirSync(freshDir, { recursive: true });
+  const twoDaysAgo = new Date(Date.now() - 48 * 3600_000);
+  utimesSync(staleDir, twoDaysAgo, twoDaysAgo);
+
+  const stderrLines = [];
+  const child = spawn(process.execPath, [server], {
+    cwd: root,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      AGY_MCP_BIN: fixture,
+      AGY_MCP_DEFAULT_WORKSPACE: root,
+      AGY_MCP_ALLOWED_ROOT: root,
+      AGY_MCP_ENV_ROOT: tempEnvRoot,
+      AGY_MCP_ENV_ISOLATION: "off",
+      AGY_MCP_GUARD: "off",
+    },
+  });
+  const rlOut = createInterface({ input: child.stdout });
+  const rlErr = createInterface({ input: child.stderr });
+  rlErr.on("line", (line) => stderrLines.push(line));
+  const pending = new Map();
+
+  rlOut.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const msg = JSON.parse(trimmed);
+    if (msg && typeof msg === "object" && "id" in msg) {
+      const waiter = pending.get(msg.id);
+      if (waiter) {
+        pending.delete(msg.id);
+        waiter(msg);
+      }
+    }
+  });
+
+  const send = (message) =>
+    new Promise((resolve, reject) => {
+      pending.set(message.id, resolve);
+      child.stdin.write(`${JSON.stringify(message)}\n`, (err) => {
+        if (err) {
+          pending.delete(message.id);
+          reject(err);
+        }
+      });
+    });
+
+  t.after(async () => {
+    rlOut.close();
+    rlErr.close();
+    child.stdin.end();
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    rmSync(tempEnvRoot, { recursive: true, force: true });
+  });
+
+  // 1. Discover 2026-07-28 and verify tasks extension is advertised
+  const discover = await send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "server/discover",
+    params: { _meta: modernMeta(true) },
+  });
+  assert.equal(discover.result.resultType, "complete");
+  assert.ok(discover.result.supportedVersions.includes("2026-07-28"));
+  assert.ok(discover.result.capabilities?.extensions?.[TASKS_EXTENSION_ID]);
+  await waitFor(() =>
+    stderrLines.some((line) => line === "agy-orch-mcp: tasks_enabled"),
+  );
+
+  // Verify startup pruneEnvRoots removed staleDir while keeping freshDir
+  await waitFor(() => !existsSync(staleDir), 2_000);
+  assert.equal(existsSync(freshDir), true);
+
+  // 2. Call antigravity_run with tasks extension -> returns task handle
+  const callRun = await send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "antigravity_run",
+      arguments: {
+        prompt: "task-mode-run",
+        workspace: root,
+        timeout_seconds: 10,
+      },
+      _meta: modernMeta(true),
+    },
+  });
+  const taskHandle = callRun.result;
+  assert.equal(taskHandle.resultType, "task");
+  assert.equal(taskHandle.status, "working");
+  assert.equal(typeof taskHandle.taskId, "string");
+
+  // 3. Poll tasks/get until completed
+  let completedTask;
+  for (let i = 0; i < 40; i++) {
+    const poll = await send({
+      jsonrpc: "2.0",
+      id: 100 + i,
+      method: "tasks/get",
+      params: { taskId: taskHandle.taskId, _meta: modernMeta(true) },
+    });
+    completedTask = poll.result;
+    assert.equal(completedTask.resultType, "complete");
+    if (completedTask.status !== "working") break;
+    await delay(20);
+  }
+  assert.equal(completedTask.status, "completed");
+  const toolVal = valueOf(completedTask.result);
+  assert.equal(toolVal.ok, true);
+  assert.equal(JSON.parse(toolVal.response).prompt, "task-mode-run");
+  assert.equal(toolVal.context.turns, 1);
+  assert.equal(toolVal.context.turn_total_tokens, 42);
+  assert.equal(typeof toolVal.context.rotate_threshold_tokens, "number");
+
+  // 4. Call antigravity_continue with tasks extension -> returns task handle and completes
+  const callCont = await send({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: {
+      name: "antigravity_continue",
+      arguments: {
+        prompt: "task-mode-continue",
+        conversation_id: toolVal.conversation_id,
+        workspace: root,
+        timeout_seconds: 10,
+      },
+      _meta: modernMeta(true),
+    },
+  });
+  assert.equal(callCont.result.resultType, "task");
+  assert.equal(callCont.result.status, "working");
+  let completedCont;
+  for (let i = 0; i < 40; i++) {
+    const poll = await send({
+      jsonrpc: "2.0",
+      id: 200 + i,
+      method: "tasks/get",
+      params: { taskId: callCont.result.taskId, _meta: modernMeta(true) },
+    });
+    completedCont = poll.result;
+    if (completedCont.status !== "working") break;
+    await delay(20);
+  }
+  assert.equal(completedCont.status, "completed");
+  assert.equal(valueOf(completedCont.result).context.turns, 2);
+});
+
+test("AGY_MCP_TASKS=off logs tasks_disabled to stderr and executes inline", async (t) => {
+  const stderrLines = [];
+  const child = spawn(process.execPath, [server], {
+    cwd: root,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      AGY_MCP_BIN: fixture,
+      AGY_MCP_DEFAULT_WORKSPACE: root,
+      AGY_MCP_ALLOWED_ROOT: root,
+      AGY_MCP_TASKS: "off",
+      AGY_MCP_ENV_ISOLATION: "off",
+      AGY_MCP_GUARD: "off",
+    },
+  });
+  const rlOut = createInterface({ input: child.stdout });
+  const rlErr = createInterface({ input: child.stderr });
+  rlErr.on("line", (line) => stderrLines.push(line));
+  const pending = new Map();
+  rlOut.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const msg = JSON.parse(trimmed);
+    if (msg && typeof msg === "object" && "id" in msg) {
+      const waiter = pending.get(msg.id);
+      if (waiter) {
+        pending.delete(msg.id);
+        waiter(msg);
+      }
+    }
+  });
+  const send = (message) =>
+    new Promise((resolve, reject) => {
+      pending.set(message.id, resolve);
+      child.stdin.write(`${JSON.stringify(message)}\n`, (err) => {
+        if (err) {
+          pending.delete(message.id);
+          reject(err);
+        }
+      });
+    });
+
+  t.after(async () => {
+    rlOut.close();
+    rlErr.close();
+    child.stdin.end();
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+  });
+
+  await send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "server/discover",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { name: "c", version: "1.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {
+          extensions: { "io.modelcontextprotocol/tasks": {} },
+        },
+      },
+    },
+  });
+
+  await waitFor(() =>
+    stderrLines.some((line) =>
+      line.startsWith("agy-orch-mcp: tasks_disabled ("),
+    ),
+  );
+
+  const inlineCall = await send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "antigravity_run",
+      arguments: { prompt: "inline-when-tasks-off", timeout_seconds: 10 },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+          extensions: { "io.modelcontextprotocol/tasks": {} },
+        },
+      },
+    },
+  });
+  assert.notEqual(inlineCall.result.resultType, "task");
+  assert.equal(valueOf(inlineCall.result).ok, true);
 });
