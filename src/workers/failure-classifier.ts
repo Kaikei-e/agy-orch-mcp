@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FailureClass, FailureDetail } from "../domain/failure.js";
 import { computeFailureFingerprint as computeDomainFingerprint } from "../domain/failure.js";
-import type { WorkerExecutionResult } from "../domain/execution.js";
+import type { WorkerExecutionResult } from "./worker-adapter.js";
 import type { GateExecutionResult } from "../gates/gate-runner.js";
 
 export type { FailureClass, FailureDetail };
@@ -48,6 +48,13 @@ export function classifyFailure(
   const combined = [input.error ?? "", input.stderr ?? "", input.stdout ?? ""]
     .join("\n")
     .toLowerCase();
+
+  if (
+    combined.includes("resume budget exhausted") ||
+    /turn reached the \d+-second cap/.test(combined)
+  ) {
+    return "WORKER_TIMEOUT";
+  }
 
   // Scope violation
   if (

@@ -8,6 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { MAX_TURN_SECONDS } from "../agy.js";
 import type { Config as BridgeConfig } from "../config.js";
 import type {
   BatchRequestV1,
@@ -22,7 +23,7 @@ import type {
   WorkerAdapter,
   WorkerExecutionRequest,
   WorkerTier,
-} from "../domain/execution.js";
+} from "../workers/worker-adapter.js";
 import type { FailureClass } from "../domain/failure.js";
 import { validateDag } from "../validation/dag.js";
 import { resolveEffectiveBudget as resolveBudgetValidation } from "../validation/budget.js";
@@ -981,8 +982,10 @@ export class Scheduler {
         },
       };
 
+      const defaultTurnTimeoutMs = MAX_TURN_SECONDS * 1_000;
       const taskTimeoutMs = Math.min(
-        task.spec.worker?.timeout_ms ?? 300_000,
+        task.spec.worker?.timeout_ms ?? defaultTurnTimeoutMs,
+        defaultTurnTimeoutMs,
         remainingWallMs,
       );
 
@@ -995,6 +998,36 @@ export class Scheduler {
         tier: task.workerTier,
         timeoutMs: taskTimeoutMs,
         signal: childController.signal,
+        resume: {
+          consume: () => {
+            if (
+              this.cancellation.isAborted ||
+              this.getRemainingWallTimeMs() < 60_000
+            ) {
+              return false;
+            }
+            if (!this.budget.consumeWorkerCall()) {
+              return false;
+            }
+            this.metrics.workerCalls++;
+            try {
+              this.telemetry.logEvent({
+                trace_id: this.traceId,
+                run_id: this.runId,
+                timestamp: new Date().toISOString(),
+                event_type: "budget_consumed",
+                task_id: taskId,
+                attempt: task.attempts,
+                failure_class: "WORKER_TIMEOUT",
+                status: "resume",
+                metrics: { worker_calls: this.metrics.workerCalls },
+              });
+            } catch {
+              // Non-fatal telemetry failure
+            }
+            return true;
+          },
+        },
       };
 
       let result;
@@ -1006,6 +1039,8 @@ export class Scheduler {
           exitCode:
             execResult.exitCode ?? (execResult.status === "succeeded" ? 0 : 1),
           error: execResult.message,
+          failureClass: execResult.failureClass,
+          turns: execResult.turns,
           durationMs: Date.now() - startTime,
           stdout: execResult.stdout,
           stderr: execResult.stderr,
@@ -1207,7 +1242,8 @@ export class Scheduler {
     if (
       failure.code === "TRANSIENT_INFRA" ||
       failure.code === "RATE_LIMIT" ||
-      failure.code === "WORKER_TIMEOUT"
+      (failure.code === "WORKER_TIMEOUT" &&
+        !failure.message.includes("resume budget exhausted"))
     ) {
       if (this.budget.hasWorkerCallBudget()) {
         this.metrics.retries++;

@@ -1,6 +1,6 @@
 import type { TaskSpecV1 } from "../domain/ir.js";
 import type { FailureClass } from "../domain/failure.js";
-import type { WorkerTier } from "../domain/execution.js";
+import type { WorkerTier } from "./worker-adapter.js";
 import { type Config as BridgeConfig, type Config } from "../config.js";
 
 export type RoutingActionKind =
@@ -205,6 +205,18 @@ export function shouldEscalateToReasoning(context: RoutingContext): boolean {
   return decideRoutingAction(context).action === "escalate_reasoning";
 }
 
+const EFFORT_SUFFIX_RE = /-(low|medium|high|xhigh|max)$/i;
+
+function resolveEffortForModel(
+  model: string | undefined,
+  tierEffort: "low" | "medium" | "high",
+): "low" | "medium" | "high" | undefined {
+  if (model && EFFORT_SUFFIX_RE.test(model)) {
+    return undefined;
+  }
+  return tierEffort;
+}
+
 /**
  * Resolves model and effort for a given tier according to BridgeConfig and task spec overrides.
  * Honestly reports limitations if BridgeConfig lacks tier-specific model mappings.
@@ -214,13 +226,14 @@ export function resolveWorkerModel(
   config: BridgeConfig | Config,
   explicitTaskModel?: string,
 ): ModelResolutionResult {
-  const effort: "low" | "medium" | "high" =
+  const tierEffort: "low" | "medium" | "high" =
     tier === "reasoning" ? "high" : "low";
 
   if (explicitTaskModel && explicitTaskModel.trim()) {
+    const model = explicitTaskModel.trim();
     return {
-      model: explicitTaskModel.trim(),
-      effort,
+      model,
+      effort: resolveEffortForModel(model, tierEffort),
       isExplicit: true,
     };
   }
@@ -239,17 +252,19 @@ export function resolveWorkerModel(
       : extendedConfig.reasoningModel);
 
   if (configuredTierModel && configuredTierModel.trim()) {
+    const model = configuredTierModel.trim();
     return {
-      model: configuredTierModel.trim(),
-      effort,
+      model,
+      effort: resolveEffortForModel(model, tierEffort),
       isExplicit: false,
     };
   }
 
   if (config.defaultModel && config.defaultModel.trim()) {
+    const model = config.defaultModel.trim();
     return {
-      model: config.defaultModel.trim(),
-      effort,
+      model,
+      effort: resolveEffortForModel(model, tierEffort),
       isExplicit: false,
       limitationNotice:
         tier === "reasoning"
@@ -260,7 +275,7 @@ export function resolveWorkerModel(
 
   return {
     model: undefined,
-    effort,
+    effort: tierEffort,
     isExplicit: false,
     limitationNotice:
       "BridgeConfig has no defaultModel or tier-specific model configured; relying on agy CLI default model.",

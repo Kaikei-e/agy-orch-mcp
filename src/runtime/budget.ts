@@ -70,6 +70,13 @@ export class BudgetTracker {
     return true;
   }
 
+  /** Consume one worker call for an already-active slot (e.g. auto-resume). */
+  consumeWorkerCall(): boolean {
+    if (this.workerCallsUsed >= this.budget.maxWorkerCalls) return false;
+    this.workerCallsUsed++;
+    return true;
+  }
+
   /** Release an active worker slot after completion. */
   releaseSlot(): void {
     if (this.activeSlots > 0) this.activeSlots--;

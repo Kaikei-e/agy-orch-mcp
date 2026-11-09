@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { MAX_TURN_SECONDS } from "../agy.js";
 import type { BatchRequestV1, FetchRequestV1 } from "../domain/ir.js";
 import { validateModelSlug } from "../policy.js";
 import { validateDag, patternsOverlap } from "./dag.js";
@@ -63,7 +64,12 @@ export const taskSpecSchema = z
             }
           }, "Invalid model slug")
           .optional(),
-        timeout_ms: z.number().int().min(1_000).max(3_600_000).optional(),
+        timeout_ms: z
+          .number()
+          .int()
+          .min(1_000)
+          .max(MAX_TURN_SECONDS * 1_000)
+          .optional(),
       })
       .strict()
       .optional(),

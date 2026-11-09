@@ -2,16 +2,22 @@ import type { TaskSpecV1 } from "../domain/ir.js";
 import type { FailureClass } from "../domain/failure.js";
 import type {
   WorkerTier,
-  WorkerExecutionRequest,
-  WorkerExecutionResult,
-  WorkerAdapter,
+  WorkerExecutionRequest as BaseWorkerExecutionRequest,
+  WorkerExecutionResult as BaseWorkerExecutionResult,
 } from "../domain/execution.js";
 
-export type {
-  WorkerTier,
-  WorkerExecutionRequest,
-  WorkerExecutionResult,
-  WorkerAdapter,
-  TaskSpecV1,
-  FailureClass,
-};
+export interface WorkerExecutionRequest extends BaseWorkerExecutionRequest {
+  resume?: {
+    consume: () => boolean;
+  };
+}
+
+export interface WorkerExecutionResult extends BaseWorkerExecutionResult {
+  turns?: number;
+}
+
+export interface WorkerAdapter {
+  execute(request: WorkerExecutionRequest): Promise<WorkerExecutionResult>;
+}
+
+export type { WorkerTier, TaskSpecV1, FailureClass };

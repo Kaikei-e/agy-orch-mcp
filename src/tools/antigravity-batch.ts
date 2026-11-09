@@ -10,7 +10,7 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { ArtifactStore } from "../artifacts/store.js";
 import { resolveWorkspace, type Config as BridgeConfig } from "../config.js";
 import type { ProcessRunner } from "../process.js";
-import type { WorkerAdapter } from "../domain/execution.js";
+import type { WorkerAdapter } from "../workers/worker-adapter.js";
 import type { BatchRequestV1, BatchResponseV1 } from "../domain/ir.js";
 import {
   estimateMinimalDigestTokens,

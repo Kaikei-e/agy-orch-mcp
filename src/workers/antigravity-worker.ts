@@ -1,11 +1,12 @@
 import { type Config as BridgeConfig, type Config } from "../config.js";
 import { runAgy, type RunOptions } from "../agy.js";
 import { ProcessRunner } from "../process.js";
+import type { RunResult } from "../run-result.js";
 import type {
   WorkerAdapter,
   WorkerExecutionRequest,
   WorkerExecutionResult,
-} from "../domain/execution.js";
+} from "./worker-adapter.js";
 import { classifyFailure } from "./failure-classifier.js";
 import { resolveWorkerModel } from "./routing-policy.js";
 
@@ -52,6 +53,76 @@ function normalizeUsage(
     result.total_tokens = inTok + outTok;
   }
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function sumUsage(
+  records: Array<{
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  }>,
+):
+  | { input_tokens?: number; output_tokens?: number; total_tokens?: number }
+  | undefined {
+  if (records.length === 0) return undefined;
+  let hasIn = false;
+  let hasOut = false;
+  let hasTotal = false;
+  let inSum = 0;
+  let outSum = 0;
+  let totalSum = 0;
+
+  for (const r of records) {
+    if (r.input_tokens !== undefined) {
+      hasIn = true;
+      inSum += r.input_tokens;
+    }
+    if (r.output_tokens !== undefined) {
+      hasOut = true;
+      outSum += r.output_tokens;
+    }
+    if (r.total_tokens !== undefined) {
+      hasTotal = true;
+      totalSum += r.total_tokens;
+    }
+  }
+
+  const result: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  } = {};
+  if (hasIn) result.input_tokens = inSum;
+  if (hasOut) result.output_tokens = outSum;
+  if (hasTotal) result.total_tokens = totalSum;
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+export function buildResumePrompt(runResult: RunResult): string {
+  const sections: string[] = [
+    "Your previous turn was cut off by the 15-minute turn cap. Continue the same task in the same worktree.",
+  ];
+
+  const verified = (runResult.verifiedOutputs ?? []).slice(-10);
+  if (verified.length > 0) {
+    sections.push(
+      verified
+        .map((item) => `${item.status} exit=${item.exit_code} ${item.command}`)
+        .join("\n"),
+    );
+  }
+
+  const note = (runResult.partialResponse ?? "").slice(0, 1500);
+  sections.push(`Last progress note:\n${note}`);
+
+  const changes = (runResult.workspaceChanges ?? []).slice(0, 30);
+  sections.push(`Uncommitted changes:\n${changes.join("\n")}`);
+
+  sections.push(
+    "Finish the remaining work in small verified steps, then end with your final summary.",
+  );
+
+  return sections.join("\n\n");
 }
 
 /**
@@ -149,6 +220,7 @@ export class AntigravityWorker implements WorkerAdapter {
         stdout: "",
         stderr: "",
         message: "Execution cancelled before start",
+        turns: 0,
       };
     }
 
@@ -161,181 +233,235 @@ export class AntigravityWorker implements WorkerAdapter {
 
     const timeoutSec = Math.max(1, Math.ceil(request.timeoutMs / 1000));
 
-    const runOptions: RunOptions = {
-      prompt,
-      workspace: request.workspace,
-      model: modelResolution.model,
-      effort: modelResolution.effort,
-      mode: "accept-edits",
-      autonomy: "safe", // Never silently use full autonomy
-      timeoutSec,
-      signal: request.signal,
-      runId: request.runId,
-      traceId: request.traceId,
-    };
+    let turns = 0;
+    let currentPrompt = prompt;
+    let currentConversationId: string | undefined;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const usageRecords: Array<{
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+    }> = [];
 
     try {
-      const runResult = await runAgy(runOptions, this.config, this.runner);
-      const rawStdout = runResult.rawStdout ?? runResult.response ?? "";
-      const rawStderr = runResult.stderr ?? "";
-
-      // Check if canceled
-      if (request.signal?.aborted || runResult.status === "CANCELED") {
-        return {
-          status: "cancelled",
-          stdout: rawStdout,
-          stderr: rawStderr,
-          exitCode: runResult.exitCode ?? undefined,
-          conversationId: runResult.conversationId,
+      while (true) {
+        turns++;
+        const runOptions: RunOptions = {
+          prompt: currentPrompt,
+          workspace: request.workspace,
           model: modelResolution.model,
-          message: runResult.error || "Execution was cancelled",
-          usage: normalizeUsage(runResult.usage),
+          effort: modelResolution.effort,
+          mode: "accept-edits",
+          autonomy: "safe",
+          timeoutSec,
+          conversationId: currentConversationId,
+          signal: request.signal,
+          runId: request.runId,
+          traceId: request.traceId,
         };
-      }
 
-      // Preserve denied actions and classify POLICY_DENIED rather than claim success on exit0
-      if (
-        (runResult.deniedActions && runResult.deniedActions.length > 0) ||
-        runResult.status === "PERMISSION_DENIED" ||
-        runResult.status === "POLICY_ERROR"
-      ) {
-        return {
-          status: "failed",
-          stdout: rawStdout,
-          stderr: rawStderr,
-          exitCode: runResult.exitCode ?? undefined,
-          failureClass: "POLICY_DENIED",
-          conversationId: runResult.conversationId,
-          model: modelResolution.model,
-          message:
-            runResult.error ||
-            `Policy denied: agy reported ${runResult.deniedActions?.length ?? 1} denied action(s)`,
-          usage: normalizeUsage(runResult.usage),
-        };
-      }
+        const runResult = await runAgy(runOptions, this.config, this.runner);
+        stdoutChunks.push(runResult.rawStdout ?? runResult.response ?? "");
+        stderrChunks.push(runResult.stderr ?? "");
+        const turnUsage = normalizeUsage(runResult.usage);
+        if (turnUsage) {
+          usageRecords.push(turnUsage);
+        }
 
-      // Check timeout
-      if (runResult.status === "TIMEOUT") {
-        return {
-          status: "failed",
-          stdout: rawStdout,
-          stderr: rawStderr,
-          exitCode: runResult.exitCode ?? undefined,
-          failureClass: "WORKER_TIMEOUT",
-          conversationId: runResult.conversationId,
-          model: modelResolution.model,
-          message:
-            runResult.error || `Worker exceeded timeout of ${timeoutSec}s`,
-          usage: normalizeUsage(runResult.usage),
-        };
-      }
+        const rawStdout = stdoutChunks.join("");
+        const rawStderr = stderrChunks.join("");
+        const aggregatedUsage = sumUsage(usageRecords);
+        const conversationId =
+          runResult.conversationId ?? currentConversationId;
 
-      // Check empty response
-      if (runResult.status === "EMPTY_RESPONSE") {
-        return {
-          status: "failed",
-          stdout: rawStdout,
-          stderr: rawStderr,
-          exitCode: runResult.exitCode ?? undefined,
-          failureClass: "INTERNAL_ERROR",
-          conversationId: runResult.conversationId,
-          model: modelResolution.model,
-          message: runResult.error || "Worker returned empty response",
-          usage: normalizeUsage(runResult.usage),
-        };
-      }
+        if (request.signal?.aborted || runResult.status === "CANCELED") {
+          return {
+            status: "cancelled",
+            stdout: rawStdout,
+            stderr: rawStderr,
+            exitCode: runResult.exitCode ?? undefined,
+            conversationId,
+            model: modelResolution.model,
+            message: runResult.error || "Execution was cancelled",
+            usage: aggregatedUsage,
+            turns,
+          };
+        }
 
-      if (runResult.ok) {
-        const respLower = (runResult.response || "").toLowerCase();
-        const isAmbiguous =
-          respLower.includes("requirements are ambiguous") ||
-          respLower.includes("requirement ambiguity") ||
-          respLower.includes("requirements are underspecified");
-        const isArch =
-          respLower.includes("architectural decision") ||
-          respLower.includes("architectural choice");
-
-        if (isAmbiguous) {
+        if (
+          (runResult.deniedActions && runResult.deniedActions.length > 0) ||
+          runResult.status === "PERMISSION_DENIED" ||
+          runResult.status === "POLICY_ERROR"
+        ) {
           return {
             status: "failed",
             stdout: rawStdout,
             stderr: rawStderr,
             exitCode: runResult.exitCode ?? undefined,
-            failureClass: "REQUIREMENT_AMBIGUITY",
-            conversationId: runResult.conversationId,
+            failureClass: "POLICY_DENIED",
+            conversationId,
             model: modelResolution.model,
             message:
               runResult.error ||
-              "Worker output indicated REQUIREMENT_AMBIGUITY",
-            usage: normalizeUsage(runResult.usage),
+              `Policy denied: agy reported ${runResult.deniedActions?.length ?? 1} denied action(s)`,
+            usage: aggregatedUsage,
+            turns,
           };
         }
 
-        if (isArch) {
+        if (runResult.status === "TIMEOUT") {
+          if (runResult.resumable === true && runResult.conversationId) {
+            if (request.resume?.consume() === true) {
+              currentConversationId = runResult.conversationId;
+              currentPrompt = buildResumePrompt(runResult);
+              continue;
+            }
+            const baseMsg =
+              runResult.error || `Worker exceeded timeout of ${timeoutSec}s`;
+            return {
+              status: "failed",
+              stdout: rawStdout,
+              stderr: rawStderr,
+              exitCode: runResult.exitCode ?? undefined,
+              failureClass: "WORKER_TIMEOUT",
+              conversationId,
+              model: modelResolution.model,
+              message: `${baseMsg}; resume budget exhausted after ${turns} turns`,
+              usage: aggregatedUsage,
+              turns,
+            };
+          }
+
           return {
             status: "failed",
             stdout: rawStdout,
             stderr: rawStderr,
             exitCode: runResult.exitCode ?? undefined,
-            failureClass: "ARCHITECTURE_DECISION",
-            conversationId: runResult.conversationId,
+            failureClass: "WORKER_TIMEOUT",
+            conversationId,
             model: modelResolution.model,
             message:
-              runResult.error ||
-              "Worker output indicated ARCHITECTURE_DECISION",
-            usage: normalizeUsage(runResult.usage),
+              runResult.error || `Worker exceeded timeout of ${timeoutSec}s`,
+            usage: aggregatedUsage,
+            turns,
           };
         }
 
+        if (runResult.status === "EMPTY_RESPONSE") {
+          return {
+            status: "failed",
+            stdout: rawStdout,
+            stderr: rawStderr,
+            exitCode: runResult.exitCode ?? undefined,
+            failureClass: "INTERNAL_ERROR",
+            conversationId,
+            model: modelResolution.model,
+            message: runResult.error || "Worker returned empty response",
+            usage: aggregatedUsage,
+            turns,
+          };
+        }
+
+        if (runResult.ok) {
+          const respLower = (runResult.response || "").toLowerCase();
+          const isAmbiguous =
+            respLower.includes("requirements are ambiguous") ||
+            respLower.includes("requirement ambiguity") ||
+            respLower.includes("requirements are underspecified");
+          const isArch =
+            respLower.includes("architectural decision") ||
+            respLower.includes("architectural choice");
+
+          if (isAmbiguous) {
+            return {
+              status: "failed",
+              stdout: rawStdout,
+              stderr: rawStderr,
+              exitCode: runResult.exitCode ?? undefined,
+              failureClass: "REQUIREMENT_AMBIGUITY",
+              conversationId,
+              model: modelResolution.model,
+              message:
+                runResult.error ||
+                "Worker output indicated REQUIREMENT_AMBIGUITY",
+              usage: aggregatedUsage,
+              turns,
+            };
+          }
+
+          if (isArch) {
+            return {
+              status: "failed",
+              stdout: rawStdout,
+              stderr: rawStderr,
+              exitCode: runResult.exitCode ?? undefined,
+              failureClass: "ARCHITECTURE_DECISION",
+              conversationId,
+              model: modelResolution.model,
+              message:
+                runResult.error ||
+                "Worker output indicated ARCHITECTURE_DECISION",
+              usage: aggregatedUsage,
+              turns,
+            };
+          }
+
+          return {
+            status: "succeeded",
+            stdout: rawStdout,
+            stderr: rawStderr,
+            exitCode: runResult.exitCode ?? 0,
+            conversationId,
+            model: modelResolution.model,
+            usage: aggregatedUsage,
+            turns,
+          };
+        }
+
+        const failureClass = classifyFailure({
+          exitCode: runResult.exitCode,
+          stdout: runResult.response,
+          stderr: runResult.stderr,
+          error: runResult.error,
+          isWorkerTimeout: runResult.status === "TIMEOUT",
+          deniedActions: runResult.deniedActions,
+        });
+
         return {
-          status: "succeeded",
+          status: "failed",
           stdout: rawStdout,
           stderr: rawStderr,
-          exitCode: runResult.exitCode ?? 0,
-          conversationId: runResult.conversationId,
+          exitCode: runResult.exitCode ?? undefined,
+          failureClass,
+          conversationId,
           model: modelResolution.model,
-          usage: normalizeUsage(runResult.usage),
+          message:
+            runResult.error || `Worker failed with status ${runResult.status}`,
+          usage: aggregatedUsage,
+          turns,
         };
       }
-
-      // Other failure classification
-      const failureClass = classifyFailure({
-        exitCode: runResult.exitCode,
-        stdout: runResult.response,
-        stderr: runResult.stderr,
-        error: runResult.error,
-        isWorkerTimeout: runResult.status === "TIMEOUT",
-        deniedActions: runResult.deniedActions,
-      });
-
-      return {
-        status: "failed",
-        stdout: rawStdout,
-        stderr: rawStderr,
-        exitCode: runResult.exitCode ?? undefined,
-        failureClass,
-        conversationId: runResult.conversationId,
-        model: modelResolution.model,
-        message:
-          runResult.error || `Worker failed with status ${runResult.status}`,
-        usage: normalizeUsage(runResult.usage),
-      };
     } catch (err: unknown) {
       if (request.signal?.aborted) {
         return {
           status: "cancelled",
-          stdout: "",
-          stderr: "",
+          stdout: stdoutChunks.join(""),
+          stderr: stderrChunks.join(""),
           message: "Execution was cancelled",
+          turns,
         };
       }
       const message = err instanceof Error ? err.message : String(err);
       return {
         status: "failed",
-        stdout: "",
-        stderr: message,
+        stdout: stdoutChunks.join(""),
+        stderr: stderrChunks.length
+          ? `${stderrChunks.join("")}\n${message}`
+          : message,
         failureClass: "INTERNAL_ERROR",
         message,
+        turns,
       };
     }
   }
