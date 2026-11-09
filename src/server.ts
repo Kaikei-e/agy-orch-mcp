@@ -1,12 +1,23 @@
-import { McpServer, type ServerContext } from "@modelcontextprotocol/server";
+import {
+  McpServer,
+  type CallToolResult,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { listModels, runAgy, type RunOptions } from "./agy.js";
+import {
+  MAX_TURN_SECONDS,
+  listModels,
+  runAgy,
+  type RunOptions,
+} from "./agy.js";
 import type { RunResult } from "./run-result.js";
 import { DEFAULT_MODEL, resolveWorkspace, type Config } from "./config.js";
+import { pruneEnvRoots } from "./isolation.js";
 import { ProcessRunner } from "./process.js";
 import { toToolResult } from "./result.js";
+import { TaskRegistry, installTasksExtension, runToolOrTask } from "./tasks.js";
 import { version } from "./version.js";
 import { validateModelSlug } from "./policy.js";
 import { ArtifactStore } from "./artifacts/store.js";
@@ -23,7 +34,7 @@ const text = (max: number) =>
     .refine((value) => !value.includes("\0"), "NUL characters are not allowed");
 
 const policy =
-  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. State the commands the worker may run positively; on PERMISSION_DENIED, continue with a named permitted alternative instead of repeating a prohibition. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-orch-mcp or delegating back.";
+  "Host acts only as orchestrator to set direction, allocate nonoverlapping scopes, and review final diffs and evidence. Delegate ALL repository investigation, web search, source fetching, implementation, tests, and corrections to agy; host must not perform broad file investigation, web search, or code editing directly. Provide a concise prompt with explicit file ownership boundaries and test criteria, asking for a compact handoff of changed files, verification commands and results, fetched source URLs and facts, and any blockers. State the commands the worker may run positively; on PERMISSION_DENIED, continue with a named permitted alternative instead of repeating a prohibition. Turns are capped at 15 minutes; on TIMEOUT with resumable=true, continue the same conversation with antigravity_continue and use partial_response, verified_outputs, and workspace_changes. Treat verified_outputs (machine-extracted from the run) as the evidence instead of commands quoted in the response. Use queue_timeout_seconds instead of retrying on BUSY. The delegated agy worker executes tasks directly using native tools without recursively invoking agy-orch-mcp or delegating back.";
 
 const commonInput = {
   prompt: text(32_000)
@@ -68,16 +79,25 @@ const commonInput = {
     .number()
     .int()
     .min(10)
-    .max(3_600)
-    .default(300)
+    .max(MAX_TURN_SECONDS)
+    .default(MAX_TURN_SECONDS)
     .describe(
-      "Hard deadline in seconds. Configure the MCP client's timeout slightly longer.",
+      "Per-turn cap. When a turn reaches it the result is TIMEOUT with resumable=true; continue the same conversation with antigravity_continue.",
+    ),
+  queue_timeout_seconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_TURN_SECONDS)
+    .default(0)
+    .describe(
+      "When all agy slots are busy, wait up to this many seconds in the FIFO queue instead of returning BUSY.",
     ),
   return_mode: z
-    .enum(["raw", "digest"])
+    .enum(["raw", "digest", "structured"])
     .default("raw")
     .describe(
-      "raw returns standard text response; digest preserves raw stdout/stderr in artifact store and returns compact recovery pointers.",
+      "raw returns standard text response; digest preserves raw stdout/stderr in artifact store and returns compact recovery pointers; structured requests a JSON handoff (raw response stays in response and parsed object in handoff).",
     ),
 };
 
@@ -93,12 +113,7 @@ function createProgressHeartbeat(
   let finished = false;
 
   const notify = (message: string) => {
-    if (
-      token === undefined ||
-      finished ||
-      sending ||
-      context.mcpReq.signal.aborted
-    ) {
+    if (token === undefined || finished || context.mcpReq.signal.aborted) {
       return;
     }
     sending = true;
@@ -121,7 +136,9 @@ function createProgressHeartbeat(
 
   const heartbeat =
     token !== undefined
-      ? setInterval(() => notify(heartbeatMessage), intervalMs)
+      ? setInterval(() => {
+          if (!sending) notify(heartbeatMessage);
+        }, intervalMs)
       : undefined;
 
   const stop = () => {
@@ -139,6 +156,20 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     { name: "agy-orch-mcp", version },
     { instructions: policy },
   );
+
+  const taskRegistry = config.tasks ? new TaskRegistry() : undefined;
+  const tasksEnabled = taskRegistry
+    ? installTasksExtension(server, taskRegistry)
+    : false;
+  if (tasksEnabled) {
+    process.stderr.write("agy-orch-mcp: tasks_enabled\n");
+  } else {
+    process.stderr.write(
+      `agy-orch-mcp: tasks_disabled (${config.tasks ? "sdk_incompatible" : "AGY_MCP_TASKS=off"})\n`,
+    );
+  }
+
+  void pruneEnvRoots(config.envRoot).catch(() => {});
 
   const store = new ArtifactStore(
     config.defaultWorkspace,
@@ -160,15 +191,20 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     const id = result.conversationId?.toLowerCase();
     if (!id) return undefined;
     const entry = conversations.get(id) ?? { turns: 0, totalTokens: 0 };
-    const tokens = result.usage?.total_tokens;
+    const rawTurnTokens = result.turnTokens ?? result.usage?.total_tokens;
+    const turnTokens =
+      typeof rawTurnTokens === "number" && Number.isFinite(rawTurnTokens)
+        ? rawTurnTokens
+        : 0;
     entry.turns++;
-    if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0)
-      entry.totalTokens += tokens;
+    if (turnTokens > 0) entry.totalTokens += turnTokens;
     conversations.set(id, entry);
     const rotate = entry.totalTokens >= config.contextRotateTokens;
     return {
       turns: entry.turns,
+      turn_total_tokens: result.turnTokens ?? turnTokens,
       cumulative_total_tokens: entry.totalTokens,
+      rotate_threshold_tokens: config.contextRotateTokens,
       rotate_recommended: rotate,
       ...(rotate
         ? {
@@ -205,13 +241,9 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
     args: z.infer<z.ZodObject<typeof commonInput>> & {
       conversation_id?: string;
     },
-    context: ServerContext,
-  ) {
-    const heartbeat = createProgressHeartbeat(
-      context,
-      "Starting Antigravity",
-      "Waiting for Antigravity to finish",
-    );
+    signal: AbortSignal,
+    onProgress: (message: string) => void,
+  ): Promise<CallToolResult> {
     try {
       const workspace = resolveWorkspace(args.workspace, config);
       const options: RunOptions = {
@@ -223,9 +255,13 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         autonomy: args.autonomy,
         timeoutSec: args.timeout_seconds,
         conversationId: args.conversation_id,
-        signal: context.mcpReq.signal,
-        onProgress: heartbeat.notify,
-        returnMode: args.return_mode,
+        signal,
+        onProgress,
+        returnMode: args.return_mode === "digest" ? "digest" : "raw",
+        structuredHandoff: args.return_mode === "structured",
+        queueTimeoutMs: args.queue_timeout_seconds * 1_000,
+        onQueued: (position) =>
+          onProgress(`Queued for an agy slot (position ${position})`),
         store,
       };
       const result = await runAgy(options, config, runner);
@@ -251,9 +287,42 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         },
         config.maxOutputChars,
       );
-    } finally {
-      heartbeat.stop();
     }
+  }
+
+  function executeTurn(
+    args: z.infer<z.ZodObject<typeof commonInput>> & {
+      conversation_id?: string;
+    },
+    context: ServerContext,
+  ) {
+    const run = async (
+      signal: AbortSignal,
+      setStatus: (message: string) => void,
+    ): Promise<CallToolResult> => {
+      if (signal !== context.mcpReq.signal) {
+        return execute(args, signal, setStatus);
+      }
+      const heartbeat = createProgressHeartbeat(
+        context,
+        "Starting Antigravity",
+        "Waiting for Antigravity to finish",
+      );
+      try {
+        return await execute(args, signal, heartbeat.notify);
+      } finally {
+        heartbeat.stop();
+      }
+    };
+    return tasksEnabled && taskRegistry
+      ? runToolOrTask(
+          server,
+          taskRegistry,
+          context,
+          run,
+          "Starting Antigravity",
+        )
+      : run(context.mcpReq.signal, () => {});
   }
 
   let activeBatchCalls = 0;
@@ -276,11 +345,11 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
       "antigravity_run",
       {
         title: "Run Antigravity",
-        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Use a new run for every independent task instead of continuing an unrelated conversation. Returns a conversation_id for follow-up. Emit multiple antigravity_run tool calls in a single turn to execute independent read-only or disjoint-scope tasks in parallel (up to ${config.maxConcurrent} concurrent agy calls per server; excess calls return BUSY; in Codex also set supports_parallel_tool_calls = true). Parallel calls share workspace files, Antigravity account and quota; for parallel code changes prefer antigravity_batch when it is enabled.`,
+        description: `Policy: ${policy} Start one Antigravity CLI turn in a new conversation. Use a new run for every independent task instead of continuing an unrelated conversation. Returns a conversation_id for follow-up. Emit multiple antigravity_run tool calls in a single turn to execute independent read-only or disjoint-scope tasks in parallel (up to ${config.maxConcurrent} concurrent agy calls per server; excess calls return BUSY unless queue_timeout_seconds is set; in Codex also set supports_parallel_tool_calls = true). Parallel calls share workspace files, Antigravity account and quota; for parallel code changes prefer antigravity_batch when it is enabled.`,
         inputSchema: z.object(commonInput).strict(),
         annotations,
       },
-      (args, context) => execute(args, context),
+      (args, context) => executeTurn(args, context),
     );
 
     server.registerTool(
@@ -293,7 +362,7 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
           .strict(),
         annotations,
       },
-      (args, context) => execute(args, context),
+      (args, context) => executeTurn(args, context),
     );
 
     server.registerTool(
@@ -356,35 +425,55 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
         inputSchema: batchRequestSchema,
         annotations,
       },
-      async (args, context) => {
-        if (activeBatchCalls >= config.maxConcurrent) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `[BUSY] All ${config.maxConcurrent} agy slots are in use. Wait for active calls to finish or raise AGY_MCP_MAX_CONCURRENT.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        activeBatchCalls++;
-        const heartbeat = createProgressHeartbeat(
-          context,
-          "Starting batch execution",
-          "Waiting for Antigravity batch to finish",
-        );
-        try {
-          return await executeBatchTool(args, {
-            store,
-            config,
-            runner,
-            signal: context.mcpReq.signal,
-          });
-        } finally {
-          heartbeat.stop();
-          activeBatchCalls--;
-        }
+      (args, context) => {
+        const runBatch = async (
+          signal: AbortSignal,
+          setStatus: (message: string) => void,
+        ): Promise<CallToolResult> => {
+          if (activeBatchCalls >= config.maxConcurrent) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `[BUSY] All ${config.maxConcurrent} agy slots are in use. Wait for active calls to finish or raise AGY_MCP_MAX_CONCURRENT.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          activeBatchCalls++;
+          const isTask = signal !== context.mcpReq.signal;
+          const heartbeat = isTask
+            ? undefined
+            : createProgressHeartbeat(
+                context,
+                "Starting batch execution",
+                "Waiting for Antigravity batch to finish",
+              );
+          if (isTask) {
+            setStatus("Running Antigravity batch");
+          }
+          try {
+            return await executeBatchTool(args, {
+              store,
+              config,
+              runner,
+              signal,
+            });
+          } finally {
+            heartbeat?.stop();
+            activeBatchCalls--;
+          }
+        };
+        return tasksEnabled && taskRegistry
+          ? runToolOrTask(
+              server,
+              taskRegistry,
+              context,
+              runBatch,
+              "Starting batch execution",
+            )
+          : runBatch(context.mcpReq.signal, () => {});
       },
     );
   }

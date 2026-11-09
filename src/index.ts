@@ -1,20 +1,55 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { DEFAULT_MODEL, loadConfig } from "./config.js";
+import {
+  defaultHooksPath,
+  guardHookCommand,
+  guardStatus,
+  installGuard,
+  uninstallGuard,
+} from "./guard.js";
 import { ProcessRunner } from "./process.js";
 import { createServer } from "./server.js";
+import { auditPermissions } from "./settings-audit.js";
 import { version } from "./version.js";
+
+const guardHookScriptPath = fileURLToPath(
+  new URL("./guard-hook.js", import.meta.url),
+);
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     process.stdout.write(
-      `agy-orch-mcp ${version}\n\nUsage: agy-orch-mcp [--help | --version | --doctor]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace and CLI flags without starting a model turn.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL (default ${DEFAULT_MODEL}), AGY_MCP_MAX_CONCURRENT (default 8, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_CONTEXT_ROTATE_TOKENS, AGY_MCP_ALLOW_FULL_AUTONOMY.\nSee https://github.com/Kaikei-e/agy-orch-mcp for setup.\n`,
+      `agy-orch-mcp ${version}\n\nUsage: agy-orch-mcp [--help | --version | --doctor | --install-guard | --uninstall-guard]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace, CLI flags, guard hook, and permission settings without starting a model turn.\n--install-guard installs or updates the command guard hook in ~/.gemini/config/hooks.json.\n--uninstall-guard removes the command guard hook from ~/.gemini/config/hooks.json.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL (default ${DEFAULT_MODEL}), AGY_MCP_MAX_CONCURRENT (default 8, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_CONTEXT_ROTATE_TOKENS, AGY_MCP_ALLOW_FULL_AUTONOMY,\nAGY_MCP_GUARD, AGY_MCP_ENV_ISOLATION, AGY_MCP_ENV_ROOT, AGY_MCP_TASKS.\nSee https://github.com/Kaikei-e/agy-orch-mcp for setup.\n`,
     );
     return;
   }
   if (args.length === 1 && args[0] === "--version") {
     process.stdout.write(`${version}\n`);
+    return;
+  }
+  if (args.length === 1 && args[0] === "--install-guard") {
+    const hooksPath = defaultHooksPath();
+    const result = installGuard(
+      hooksPath,
+      guardHookCommand(process.execPath, guardHookScriptPath),
+    );
+    process.stdout.write(
+      `Guard hook: ${result.status} (${hooksPath})${result.backupPath ? ` (backup: ${result.backupPath})` : ""}\n`,
+    );
+    return;
+  }
+  if (args.length === 1 && args[0] === "--uninstall-guard") {
+    const hooksPath = defaultHooksPath();
+    const removed = uninstallGuard(hooksPath);
+    process.stdout.write(
+      `Guard hook: ${removed ? "removed" : "not installed"} (${hooksPath})\n`,
+    );
     return;
   }
   if (args.length && (args.length !== 1 || args[0] !== "--doctor"))
@@ -52,8 +87,46 @@ async function main(): Promise<void> {
               );
           }
       }
+      const hooksPath = defaultHooksPath();
+      const gStatus = guardStatus(
+        hooksPath,
+        guardHookCommand(process.execPath, guardHookScriptPath),
+      );
+      const guardLine =
+        gStatus === "installed"
+          ? `Guard hook: installed (${hooksPath})`
+          : `Guard hook: ${gStatus} (${hooksPath}; run \`agy-orch-mcp --install-guard\` to fix)`;
+
+      const settingsPath = path.join(
+        homedir(),
+        ".gemini",
+        "antigravity-cli",
+        "settings.json",
+      );
+      let auditLines: string;
+      try {
+        const parsedSettings = JSON.parse(readFileSync(settingsPath, "utf8"));
+        const findings = auditPermissions(parsedSettings);
+        const highFindings = findings.filter((f) => f.severity === "high");
+        const mediumCount = findings.filter(
+          (f) => f.severity === "medium",
+        ).length;
+        const lowCount = findings.filter((f) => f.severity === "low").length;
+        const lines = [
+          `Permissions audit (${settingsPath}): ${highFindings.length} high, ${mediumCount} medium, ${lowCount} low`,
+          ...highFindings.map((f) => `  [HIGH] ${f.rule}: ${f.reason}`),
+        ];
+        auditLines = lines.join("\n");
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        auditLines =
+          code === "ENOENT"
+            ? `Permissions audit: ${settingsPath} is not readable (file not found)`
+            : `Permissions audit: ${settingsPath} is not readable (${err instanceof Error ? err.message : String(err)})`;
+      }
+
       process.stdout.write(
-        `Workspace: ${config.defaultWorkspace}\nAllowed root: ${config.allowedRoot ?? "unrestricted"}\nDefault model: ${config.defaultModel ?? "CLI default"}\nMax concurrent CLI processes: ${config.maxConcurrent}\nFull autonomy: ${config.allowFullAutonomy ? "enabled" : "disabled"}\nCLI compatibility checks passed. Authentication and workspace trust require an interactive agy session.\n`,
+        `Workspace: ${config.defaultWorkspace}\nAllowed root: ${config.allowedRoot ?? "unrestricted"}\nDefault model: ${config.defaultModel ?? "CLI default"}\nMax concurrent CLI processes: ${config.maxConcurrent}\nFull autonomy: ${config.allowFullAutonomy ? "enabled" : "disabled"}\n${guardLine}\n${auditLines}\nCLI compatibility checks passed. Authentication and workspace trust require an interactive agy session.\n`,
       );
     } finally {
       await runner.close();
