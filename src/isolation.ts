@@ -113,3 +113,32 @@ export async function removeIsolatedEnv(runRoot: string): Promise<void> {
   await makeWritableRecursive(runRoot);
   await rm(runRoot, { recursive: true, force: true });
 }
+
+export async function pruneEnvRoots(
+  envRoot: string,
+  maxAgeMs = 24 * 3600_000,
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(envRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const full = path.join(envRoot, entry.name);
+    let st;
+    try {
+      st = await lstat(full);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (!st.isDirectory() || st.isSymbolicLink()) continue;
+    if (now - st.mtimeMs > maxAgeMs) {
+      await removeIsolatedEnv(full);
+    }
+  }
+}

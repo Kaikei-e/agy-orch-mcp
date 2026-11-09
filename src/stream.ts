@@ -1,14 +1,4 @@
-export interface CommandRecord {
-  step_index: number;
-  command: string;
-  status: "completed" | "failed" | "denied" | "background" | "running";
-  exit_code: number | null;
-  output_tail?: string;
-  error?: string;
-  full_output_path?: string;
-  background_task_id?: string;
-  duration_seconds?: number;
-}
+import type { CommandRecord } from "./run-result.js";
 
 const MAX_RECORDS = 200;
 const MAX_TAIL_LINES = 20;

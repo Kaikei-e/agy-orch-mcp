@@ -104,8 +104,15 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
     ...(result.conversationId
       ? { conversation_id: result.conversationId.slice(0, 200) }
       : {}),
+    ...(result.resumable !== undefined ? { resumable: result.resumable } : {}),
+    ...(result.terminatedTasks?.length
+      ? { terminated_tasks: result.terminatedTasks }
+      : {}),
     ...(result.durationSec !== undefined
       ? { duration_seconds: result.durationSec }
+      : {}),
+    ...(result.turnSeconds !== undefined
+      ? { turn_seconds: result.turnSeconds }
       : {}),
     ...(result.queueWaitSeconds !== undefined
       ? { queue_wait_seconds: result.queueWaitSeconds }
@@ -122,6 +129,9 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
       : {}),
     ...(result.verifiedOutputs?.length
       ? { verified_outputs: result.verifiedOutputs }
+      : {}),
+    ...(result.workspaceChanges?.length
+      ? { workspace_changes: result.workspaceChanges }
       : {}),
     ...(result.usage ? { usage: result.usage } : {}),
     ...(result.context ? { context: result.context } : {}),
@@ -160,7 +170,12 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
     data.truncation_notice = result.responseArtifact
       ? "Output shortened; the full response is saved at response_artifact.path. Read only the parts you need from that file."
       : "Output shortened; ask a narrower question or raise AGY_MCP_MAX_OUTPUT_CHARS.";
-    for (const key of ["denied_actions", "denied_commands", "usage"]) {
+    for (const key of [
+      "denied_actions",
+      "denied_commands",
+      "usage",
+      "workspace_changes",
+    ]) {
       if (JSON.stringify(data).length <= limit) break;
       if (data[key] !== undefined) {
         delete data[key];
@@ -213,7 +228,12 @@ export function toToolResult(result: RunResult, limit: number): CallToolResult {
       data[key] = original.slice(0, low);
     }
 
-    for (const key of ["preflight_warnings", "handoff", "verified_outputs"]) {
+    for (const key of [
+      "preflight_warnings",
+      "handoff",
+      "terminated_tasks",
+      "verified_outputs",
+    ]) {
       if (JSON.stringify(data).length <= limit) break;
       if (data[key] !== undefined) {
         delete data[key];

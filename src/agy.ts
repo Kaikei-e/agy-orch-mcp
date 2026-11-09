@@ -1,8 +1,28 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, renameSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Config } from "./config.js";
+import {
+  FIXED_DENY_RULES,
+  GUARD_ENV,
+  defaultHooksPath,
+  guardHookCommand,
+  guardStatus,
+  sessionSettingsJson,
+  type GuardStatus,
+} from "./guard.js";
+import { HANDOFF_JSON_SCHEMA, parseHandoff } from "./handoff-schema.js";
+import { isolatedEnv, removeIsolatedEnv } from "./isolation.js";
+import { loadPermissionRules, preflightWarnings } from "./preflight.js";
 import { ProcessRunner } from "./process.js";
 import type { ArtifactStore } from "./artifacts/store.js";
-import { readDeniedCommands } from "./transcript.js";
+import type { RunResult } from "./run-result.js";
+import { StreamLedger } from "./stream.js";
+import { readDeniedCommands, readLastPlannerText } from "./transcript.js";
+
+export const MAX_TURN_SECONDS = 900;
 
 export interface RunOptions {
   prompt: string;
@@ -19,41 +39,9 @@ export interface RunOptions {
   traceId?: string;
   runId?: string;
   store?: ArtifactStore;
-}
-
-export interface RunResult {
-  ok: boolean;
-  status: string;
-  response: string;
-  exitCode: number | null;
-  error?: string;
-  conversationId?: string;
-  deniedActions?: unknown[];
-  deniedCommands?: string[];
-  usage?: Record<string, unknown>;
-  durationSec?: number;
-  stderr?: string;
-  rawStdout?: string;
-  runId?: string;
-  traceId?: string;
-  context?: {
-    turns: number;
-    cumulative_total_tokens: number;
-    rotate_recommended: boolean;
-    advice?: string;
-  };
-  responseArtifact?: { id: string; path: string };
-  recoveryPointer?: {
-    run_id: string;
-    manifest_artifact_id: string;
-    digest_artifact_id: string;
-  };
-  artifacts?: Array<{
-    id: string;
-    kind: string;
-    byte_size: number;
-    sha256: string;
-  }>;
+  structuredHandoff?: boolean;
+  queueTimeoutMs?: number;
+  onQueued?: (position: number) => void;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -123,7 +111,12 @@ export function parseAgyOutput(
   };
 }
 
+function effectiveTurnSeconds(timeoutSec: number | undefined): number {
+  return Math.min(timeoutSec ?? MAX_TURN_SECONDS, MAX_TURN_SECONDS);
+}
+
 export function buildArgs(options: RunOptions): string[] {
+  const turnSeconds = effectiveTurnSeconds(options.timeoutSec);
   const args = [
     "-p",
     options.prompt,
@@ -133,17 +126,106 @@ export function buildArgs(options: RunOptions): string[] {
     "--add-dir",
     options.workspace,
     "--print-timeout",
-    `${options.timeoutSec ?? 300}s`,
+    `${turnSeconds}s`,
     "--mode",
     options.mode ?? "plan",
   ];
   if (options.model) args.push("--model", options.model);
   if (options.effort) args.push("--effort", options.effort);
   if (options.autonomy === "sandbox") args.push("--sandbox");
-  if (options.autonomy === "full") args.push("--dangerously-skip-permissions");
+  if (options.autonomy === "full") {
+    args.push("--dangerously-skip-permissions");
+  } else {
+    args.push("--settings", sessionSettingsJson());
+  }
+  if (options.structuredHandoff) {
+    args.push("--json-schema", JSON.stringify(HANDOFF_JSON_SCHEMA));
+  }
   if (options.conversationId)
     args.push("--conversation", options.conversationId);
   return args;
+}
+
+const guardHookScriptPath = fileURLToPath(
+  new URL("./guard-hook.js", import.meta.url),
+);
+let cachedGuardCheck: { hooksPath: string; status: GuardStatus } | undefined;
+
+function checkGuardOnce(): GuardStatus {
+  const hooksPath = defaultHooksPath();
+  if (cachedGuardCheck?.hooksPath === hooksPath) {
+    return cachedGuardCheck.status;
+  }
+  const status = guardStatus(
+    hooksPath,
+    guardHookCommand(process.execPath, guardHookScriptPath),
+  );
+  cachedGuardCheck = { hooksPath, status };
+  return status;
+}
+
+function parseTerminatedTasks(
+  stderr: string,
+): Array<{ id: string; description: string }> | undefined {
+  for (const line of stderr.split(/\r?\n/)) {
+    const idx = line.indexOf("AGY_ERROR:");
+    if (idx < 0) continue;
+    try {
+      const payload = record(
+        JSON.parse(line.slice(idx + "AGY_ERROR:".length).trim()),
+      );
+      if (!Array.isArray(payload?.tasks)) continue;
+      const tasks: Array<{ id: string; description: string }> = [];
+      for (const item of payload.tasks) {
+        const entry = record(item);
+        if (
+          typeof entry?.id === "string" &&
+          typeof entry.description === "string"
+        ) {
+          tasks.push({ id: entry.id, description: entry.description });
+        }
+      }
+      if (tasks.length > 0) return tasks;
+    } catch {
+      /* ignore malformed stderr line */
+    }
+  }
+  return undefined;
+}
+
+function readWorkspaceChanges(
+  workspace: string,
+): Promise<string[] | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["-C", workspace, "status", "--porcelain=v1", "--untracked-files=all"],
+      { timeout: 10_000, encoding: "utf8" },
+      (error, stdout) => {
+        if (error || typeof stdout !== "string") {
+          resolve(undefined);
+          return;
+        }
+        const lines = stdout
+          .replace(/\r?\n$/, "")
+          .split(/\r?\n/)
+          .filter((line) => line.length > 0)
+          .slice(0, 50);
+        resolve(lines.length > 0 ? lines : undefined);
+      },
+    );
+  });
+}
+
+function isSafePathSegment(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    !value.includes("\0")
+  );
 }
 
 // agy tells the model not to rephrase a denied command, so a retry only
@@ -179,6 +261,47 @@ export async function runAgy(
     ...options,
     model: options.model ?? config.defaultModel,
   };
+  const turnLimitSec = effectiveTurnSeconds(resolvedOptions.timeoutSec);
+
+  let warnings: string[] = [];
+  if (resolvedOptions.autonomy !== "full") {
+    warnings = preflightWarnings(
+      resolvedOptions.prompt,
+      loadPermissionRules(),
+      FIXED_DENY_RULES,
+    );
+    if (config.guard) {
+      const status = checkGuardOnce();
+      if (status !== "installed") {
+        warnings.push(
+          `agy-orch-mcp guard hook is ${status}; run \`agy-orch-mcp --install-guard\` to enable command guarding.`,
+        );
+      }
+    }
+  }
+
+  let pendingRoot: string | undefined;
+  let runRoot: string | undefined;
+  if (config.envIsolation !== "off") {
+    if (
+      resolvedOptions.conversationId &&
+      isSafePathSegment(resolvedOptions.conversationId)
+    ) {
+      runRoot = path.join(config.envRoot, resolvedOptions.conversationId);
+    } else {
+      pendingRoot = path.join(config.envRoot, `pending-${randomUUID()}`);
+      runRoot = pendingRoot;
+    }
+  }
+
+  const runnerEnv: Record<string, string> = {
+    ...(config.envIsolation !== "off" && runRoot
+      ? isolatedEnv(config.envIsolation, runRoot)
+      : {}),
+    ...(resolvedOptions.autonomy !== "full" && config.guard
+      ? { [GUARD_ENV]: "1" }
+      : {}),
+  };
 
   let runId = resolvedOptions.runId;
   const traceId = resolvedOptions.traceId ?? `tr_${randomUUID().slice(0, 8)}`;
@@ -210,11 +333,14 @@ export async function runAgy(
     bin: config.bin,
     args: buildArgs(resolvedOptions),
     cwd: resolvedOptions.workspace,
-    timeoutMs: (resolvedOptions.timeoutSec ?? 300) * 1_000,
+    timeoutMs: (turnLimitSec + 60) * 1_000,
     maxBufferBytes: config.maxBufferBytes,
     maxArtifactBytes: 50 * 1024 * 1024,
     signal: resolvedOptions.signal,
     lockKey: resolvedOptions.conversationId?.toLowerCase(),
+    ...(Object.keys(runnerEnv).length > 0 ? { env: runnerEnv } : {}),
+    queueTimeoutMs: resolvedOptions.queueTimeoutMs,
+    onQueued: resolvedOptions.onQueued,
     onStdout: (chunk) => {
       if (wantsStore) rawStdout.push(chunk);
       pending += chunk;
@@ -241,14 +367,59 @@ export async function runAgy(
     },
   });
 
+  const turnSeconds = Math.round((Date.now() - startedAt) / 100) / 10;
+
+  const ledger = new StreamLedger();
+  for (const line of processResult.stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      ledger.push(JSON.parse(line));
+    } catch {
+      /* ignore */
+    }
+  }
+
   const parsed = parseAgyOutput(processResult.stdout);
-  const deniedCommands =
+
+  if (
+    pendingRoot !== undefined &&
+    parsed.conversationId &&
+    isSafePathSegment(parsed.conversationId)
+  ) {
+    const targetRoot = path.join(config.envRoot, parsed.conversationId);
+    if (existsSync(targetRoot)) {
+      await removeIsolatedEnv(pendingRoot);
+    } else {
+      try {
+        renameSync(pendingRoot, targetRoot);
+      } catch {
+        await removeIsolatedEnv(pendingRoot);
+      }
+    }
+  }
+
+  const verifiedCommands = ledger.commands();
+  const verifiedOutputs =
+    verifiedCommands.length > 0 ? verifiedCommands : undefined;
+
+  const transcriptDenied =
     parsed.deniedActions?.length && parsed.conversationId
       ? readDeniedCommands(parsed.conversationId, startedAt)
-      : undefined;
-  let status = processResult.failure ?? parsed.status;
-  let error = processResult.error ?? parsed.error;
-  if (!processResult.failure) {
+      : [];
+  const mergedDenied = [
+    ...new Set([...ledger.deniedCommands(), ...transcriptDenied]),
+  ];
+  const deniedCommands = mergedDenied.length > 0 ? mergedDenied : undefined;
+
+  const isTimeout =
+    processResult.failure === "TIMEOUT" ||
+    ledger.finishedReason() === "print_timeout";
+  let status = isTimeout ? "TIMEOUT" : (processResult.failure ?? parsed.status);
+  let error = isTimeout
+    ? `Turn reached the ${turnLimitSec}-second cap. Resume with antigravity_continue using conversation_id; partial_response, verified_outputs and workspace_changes show where it stopped.`
+    : (processResult.error ?? parsed.error);
+
+  if (!processResult.failure && !isTimeout) {
     if (!parsed.parsed)
       error ??=
         "agy did not return a recognized result envelope. Check authentication, workspace trust, and CLI version.";
@@ -265,6 +436,42 @@ export async function runAgy(
     if (processResult.exitCode !== 0)
       error ??= `agy exited with code ${processResult.exitCode ?? "unknown"}`;
     if (status !== "SUCCESS") error ??= `agy ended with status ${status}`;
+  }
+
+  const resumable =
+    status === "TIMEOUT" && parsed.conversationId ? true : undefined;
+  const terminatedTasks =
+    status === "TIMEOUT"
+      ? parseTerminatedTasks(processResult.stderr)
+      : undefined;
+
+  let partialResponse: string | undefined;
+  let workspaceChanges: string[] | undefined;
+  if (
+    status === "TIMEOUT" ||
+    status === "PERMISSION_DENIED" ||
+    status === "EMPTY_RESPONSE"
+  ) {
+    partialResponse = parsed.response.trim()
+      ? parsed.response
+      : parsed.conversationId
+        ? readLastPlannerText(parsed.conversationId, startedAt)
+        : undefined;
+    workspaceChanges = await readWorkspaceChanges(resolvedOptions.workspace);
+  }
+
+  const turnTokens = ledger.turnTokens();
+  const queueWaitSeconds =
+    processResult.queuedMs !== undefined
+      ? processResult.queuedMs / 1_000
+      : undefined;
+
+  let handoff: unknown;
+  let handoffError: string | undefined;
+  if (resolvedOptions.structuredHandoff && status === "SUCCESS") {
+    const parsedHandoff = parseHandoff(parsed.response);
+    handoff = parsedHandoff.handoff;
+    handoffError = parsedHandoff.error;
   }
 
   if (wantsStore && runId) {
@@ -350,10 +557,21 @@ export async function runAgy(
     error,
     exitCode: processResult.exitCode,
     conversationId: parsed.conversationId,
+    ...(resumable !== undefined ? { resumable } : {}),
+    ...(terminatedTasks ? { terminatedTasks } : {}),
     deniedActions: parsed.deniedActions,
     ...(deniedCommands?.length ? { deniedCommands } : {}),
+    ...(verifiedOutputs ? { verifiedOutputs } : {}),
+    ...(partialResponse ? { partialResponse } : {}),
+    ...(workspaceChanges ? { workspaceChanges } : {}),
+    ...(warnings.length ? { preflightWarnings: warnings } : {}),
+    ...(queueWaitSeconds !== undefined ? { queueWaitSeconds } : {}),
+    ...(handoff !== undefined ? { handoff } : {}),
+    ...(handoffError ? { handoffError } : {}),
     usage: parsed.usage,
     durationSec: parsed.durationSec,
+    turnSeconds,
+    ...(turnTokens !== undefined ? { turnTokens } : {}),
     stderr: processResult.stderr,
     runId,
     traceId,

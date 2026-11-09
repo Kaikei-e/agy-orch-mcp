@@ -1,5 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
+import type { IsolationMode } from "./isolation.js";
 import { validateModelSlug } from "./policy.js";
 
 import type { ServerLimits } from "./domain/limits.js";
@@ -26,6 +28,10 @@ export interface Config {
   enableFetch: boolean;
   enableBatch: boolean;
   toolSurface: ToolSurface;
+  guard: boolean;
+  envIsolation: IsolationMode;
+  tasks: boolean;
+  envRoot: string;
 }
 
 function directory(value: string): string {
@@ -70,10 +76,35 @@ export function loadConfig(
   for (const key of [
     "AGY_MCP_DEFAULT_WORKSPACE",
     "AGY_MCP_ALLOWED_ROOT",
+    "AGY_MCP_ENV_ROOT",
   ] as const) {
-    if (env[key] !== undefined && !env[key].trim())
+    if (env[key] !== undefined && (!env[key].trim() || env[key].includes("\0")))
       throw new Error(`${key} must not be blank`);
   }
+  const guardRaw = env.AGY_MCP_GUARD ?? "on";
+  if (guardRaw !== "on" && guardRaw !== "off")
+    throw new Error("AGY_MCP_GUARD must be 'on' or 'off'");
+  const envIsolationRaw = env.AGY_MCP_ENV_ISOLATION ?? "full";
+  if (
+    envIsolationRaw !== "full" &&
+    envIsolationRaw !== "install" &&
+    envIsolationRaw !== "off"
+  ) {
+    throw new Error(
+      "AGY_MCP_ENV_ISOLATION must be 'full', 'install', or 'off'",
+    );
+  }
+  const tasksRaw = env.AGY_MCP_TASKS ?? "auto";
+  if (tasksRaw !== "auto" && tasksRaw !== "off")
+    throw new Error("AGY_MCP_TASKS must be 'auto' or 'off'");
+  const stateHome =
+    env.XDG_STATE_HOME && env.XDG_STATE_HOME.trim()
+      ? path.resolve(cwd, env.XDG_STATE_HOME)
+      : path.join(homedir(), ".local", "state");
+  const envRoot =
+    env.AGY_MCP_ENV_ROOT !== undefined
+      ? path.resolve(cwd, env.AGY_MCP_ENV_ROOT)
+      : path.join(stateHome, "agy-orch", "env");
   const full = env.AGY_MCP_ALLOW_FULL_AUTONOMY ?? "false";
   if (full !== "true" && full !== "false")
     throw new Error("AGY_MCP_ALLOW_FULL_AUTONOMY must be true or false");
@@ -168,6 +199,10 @@ export function loadConfig(
     enableFetch,
     enableBatch,
     toolSurface,
+    guard: guardRaw === "on",
+    envIsolation: envIsolationRaw,
+    tasks: tasksRaw === "auto",
+    envRoot,
   };
   resolveWorkspace(undefined, config);
   return config;
