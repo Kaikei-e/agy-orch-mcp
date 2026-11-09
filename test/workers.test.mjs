@@ -179,7 +179,9 @@ test("Antigravity Worker - Execution with Fixture CLI", async (t) => {
     assert.equal(res.status, "failed");
     assert.equal(res.failureClass, "WORKER_TIMEOUT");
     assert.ok(
-      res.message?.includes("timeout") || res.message?.includes("exceeded"),
+      res.message?.includes("timeout") ||
+        res.message?.includes("exceeded") ||
+        res.message?.includes("cap"),
     );
 
     // Partial output emitted before hang is preserved in rawStdout

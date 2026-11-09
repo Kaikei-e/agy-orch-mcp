@@ -38,6 +38,21 @@ if (args[0] === "--version") {
   } else if (process.env.TEST_PID_FILE)
     writeFileSync(process.env.TEST_PID_FILE, String(process.pid));
   emit({ event: "init", conversation_id: id });
+  if (prompt === "hang" && value("--print-timeout") === "1s") {
+    await delay(50);
+    emit({
+      event: "result",
+      result: {
+        conversation_id: id,
+        status: "ERROR",
+        response: "",
+        error:
+          "print timeout after 1s with the turn still in progress; the response is partial",
+        finished_reason: "print_timeout",
+      },
+    });
+    process.exit(3);
+  }
   setInterval(() => {}, 1_000);
 } else if (prompt === "overflow") {
   process.stdout.write("x".repeat(100_000));
@@ -243,6 +258,49 @@ if (args[0] === "--version") {
       denied_actions: [{ action: "command", display_name: "RunCommand" }],
     },
   });
+} else if (prompt === "print-timeout") {
+  emit({ event: "init", conversation_id: id });
+  emit({
+    event: "step_update",
+    step_update: {
+      step_index: 1,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: {
+        name: "run_command",
+        parameters: { CommandLine: "sleep 40" },
+      },
+    },
+  });
+  emit({
+    event: "result",
+    result: {
+      conversation_id: id,
+      status: "ERROR",
+      response: "",
+      error: `print timeout after 15s with the turn still in progress; the response is partial; terminated ${id}/task-2 (sleep 40)`,
+      finished_reason: "print_timeout",
+      duration_seconds: 15,
+      usage: { total_tokens: 95 },
+    },
+  });
+  process.stderr.write(
+    `AGY_ERROR: ${JSON.stringify({
+      short_error: "print timeout",
+      status: "DEADLINE_EXCEEDED",
+      retryable: false,
+      reason: "print_timeout",
+      tasks: [
+        {
+          id: `${id}/task-2`,
+          description: "sleep 40",
+          log_uri: "file:///tmp/task-2.log",
+        },
+      ],
+    })}\n`,
+  );
+  process.exitCode = 3;
 } else {
   emit({ event: "init", conversation_id: id });
   emit({
@@ -265,12 +323,28 @@ if (args[0] === "--version") {
         ? ""
         : prompt === "large"
           ? "語".repeat(80_000)
-          : JSON.stringify({
-              prompt,
-              argv: args,
-              cwd: process.cwd(),
-              stdinIsTTY: Boolean(process.stdin.isTTY),
-            }),
+          : prompt === "handoff-ok"
+            ? JSON.stringify({
+                summary: "completed task",
+                changes: [{ path: "src/agy.ts", change: "wired run path" }],
+                verification: [
+                  { command: "pnpm test", outcome: "pass", detail: "green" },
+                ],
+                facts: ["fact-1"],
+                side_effects: [],
+                blockers: [],
+              })
+            : JSON.stringify({
+                prompt,
+                argv: args,
+                cwd: process.cwd(),
+                stdinIsTTY: Boolean(process.stdin.isTTY),
+                env: {
+                  AGY_ORCH_MCP_GUARD: process.env.AGY_ORCH_MCP_GUARD,
+                  GOBIN: process.env.GOBIN,
+                  GOPATH: process.env.GOPATH,
+                },
+              }),
     conversation_id: id,
     duration_seconds: 0.01,
     usage: { total_tokens: 42 },

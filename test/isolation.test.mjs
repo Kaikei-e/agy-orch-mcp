@@ -6,12 +6,17 @@ import {
   mkdtempSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { isolatedEnv, removeIsolatedEnv } from "../dist/isolation.js";
+import {
+  isolatedEnv,
+  pruneEnvRoots,
+  removeIsolatedEnv,
+} from "../dist/isolation.js";
 
 test("isolatedEnv off mode returns empty object and creates no directories", (t) => {
   const temp = mkdtempSync(path.join(os.tmpdir(), "agy-iso-off-"));
@@ -149,4 +154,27 @@ test("removeIsolatedEnv removes read-only chmod 0555 directories and ignores mis
   assert.equal(existsSync(runRoot), false);
 
   await removeIsolatedEnv(path.join(temp, "does-not-exist"));
+});
+
+test("pruneEnvRoots removes subdirectories older than maxAgeMs including read-only dirs", async (t) => {
+  const temp = mkdtempSync(path.join(os.tmpdir(), "agy-iso-prune-"));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  const envRoot = path.join(temp, "env");
+  const oldRoot = path.join(envRoot, "old-conv");
+  const freshRoot = path.join(envRoot, "fresh-conv");
+
+  isolatedEnv("full", oldRoot);
+  isolatedEnv("full", freshRoot);
+  const roDir = path.join(oldRoot, "go", "pkg", "mod", "ro");
+  mkdirSync(roDir, { recursive: true });
+  chmodSync(roDir, 0o555);
+
+  const past = new Date(Date.now() - 48 * 3600_000);
+  utimesSync(oldRoot, past, past);
+
+  await pruneEnvRoots(envRoot, 24 * 3600_000);
+  assert.equal(existsSync(oldRoot), false);
+  assert.equal(existsSync(freshRoot), true);
+
+  await pruneEnvRoots(path.join(temp, "missing-env-root"));
 });

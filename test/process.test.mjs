@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -13,7 +17,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { parseAgyOutput, runAgy } from "../dist/agy.js";
 import { loadConfig } from "../dist/config.js";
+import {
+  defaultHooksPath,
+  guardHookCommand,
+  installGuard,
+} from "../dist/guard.js";
 import { ProcessRunner } from "../dist/process.js";
+import { transcriptPath } from "../dist/transcript.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/agy.mjs", import.meta.url));
 const config = loadConfig({ AGY_MCP_BIN: fixture });
@@ -336,7 +346,12 @@ test("hard process failures take precedence over denied actions", async (t) => {
   );
   assert.equal(timeoutResult.ok, false);
   assert.equal(timeoutResult.status, "TIMEOUT");
-  assert.equal(timeoutResult.error, "process timed out after 5000ms");
+  assert.equal(
+    timeoutResult.error,
+    "Turn reached the 900-second cap. Resume with antigravity_continue using conversation_id; partial_response, verified_outputs and workspace_changes show where it stopped.",
+  );
+  assert.equal(timeoutResult.resumable, true);
+  assert.equal(timeoutResult.partialResponse, "partial output");
   assert.equal(timeoutResult.conversationId, "fake-timeout-id");
   assert.deepEqual(timeoutResult.deniedActions, [{ tool: "write_to_file" }]);
 
@@ -481,3 +496,388 @@ test(
     assert.equal((await active).failure, "CANCELED");
   },
 );
+
+test("runAgy maps print-timeout to TIMEOUT with resumable, terminatedTasks, turnSeconds, verifiedOutputs, and turnTokens", async (t) => {
+  const runner = new ProcessRunner();
+  t.after(() => runner.close());
+
+  const res = await runAgy(
+    { prompt: "print-timeout", workspace: process.cwd(), timeoutSec: 15 },
+    config,
+    runner,
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.status, "TIMEOUT");
+  assert.equal(res.resumable, true);
+  assert.ok(res.conversationId);
+  assert.equal(
+    res.error,
+    "Turn reached the 15-second cap. Resume with antigravity_continue using conversation_id; partial_response, verified_outputs and workspace_changes show where it stopped.",
+  );
+  assert.deepEqual(res.terminatedTasks, [
+    { id: `${res.conversationId}/task-2`, description: "sleep 40" },
+  ]);
+  assert.equal(typeof res.turnSeconds, "number");
+  assert.ok(res.turnSeconds >= 0);
+  assert.equal(res.durationSec, 15);
+  assert.equal(res.turnTokens, 95);
+  assert.deepEqual(res.verifiedOutputs, [
+    {
+      step_index: 1,
+      command: "sleep 40",
+      status: "running",
+      exit_code: null,
+    },
+  ]);
+});
+
+test("runAgy collects verifiedOutputs and deniedCommands from ledger and merges transcript denials", async (t) => {
+  const tempHome = mkdtempSync(path.join(os.tmpdir(), "agy-home-ledger-"));
+  const prevHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  const runner = new ProcessRunner();
+  t.after(async () => {
+    await runner.close();
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  const ledgerRes = await runAgy(
+    { prompt: "ledger", workspace: process.cwd() },
+    config,
+    runner,
+  );
+  assert.equal(ledgerRes.ok, true);
+  assert.equal(ledgerRes.turnTokens, 150);
+  assert.equal(ledgerRes.verifiedOutputs?.length, 3);
+  assert.equal(ledgerRes.verifiedOutputs[0].command, "echo ok");
+  assert.equal(ledgerRes.verifiedOutputs[0].status, "completed");
+  assert.equal(ledgerRes.verifiedOutputs[1].command, "ls /nope");
+  assert.equal(ledgerRes.verifiedOutputs[1].status, "failed");
+  assert.equal(ledgerRes.verifiedOutputs[2].status, "background");
+
+  const convId = randomUUID();
+  const tFile = transcriptPath(convId, tempHome);
+  mkdirSync(path.dirname(tFile), { recursive: true });
+  writeFileSync(
+    tFile,
+    [
+      JSON.stringify({
+        type: "GENERIC",
+        status: "ERROR",
+        created_at: new Date().toISOString(),
+        error:
+          'permission check failed for unsandboxed "rm -rf /tmp/nope": user denied permission to run command:\nrm -rf /tmp/nope\n',
+      }),
+      JSON.stringify({
+        type: "GENERIC",
+        status: "ERROR",
+        created_at: new Date().toISOString(),
+        error:
+          'permission check failed for unsandboxed "curl bad": user denied permission to run command:\ncurl bad\n',
+      }),
+    ].join("\n") + "\n",
+  );
+
+  const deniedRes = await runAgy(
+    {
+      prompt: "denied-tail",
+      workspace: process.cwd(),
+      conversationId: convId,
+    },
+    config,
+    runner,
+  );
+  assert.equal(deniedRes.status, "PERMISSION_DENIED");
+  assert.deepEqual(deniedRes.deniedCommands, ["rm -rf /tmp/nope", "curl bad"]);
+  assert.equal(deniedRes.verifiedOutputs?.length, 1);
+  assert.equal(deniedRes.verifiedOutputs[0].status, "denied");
+});
+
+test("runAgy partialResponse fallback order and workspaceChanges in temp git repo", async (t) => {
+  const temp = mkdtempSync(path.join(os.tmpdir(), "agy-ws-git-"));
+  const tempHome = mkdtempSync(path.join(os.tmpdir(), "agy-home-partial-"));
+  const prevHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  const runner = new ProcessRunner();
+  t.after(async () => {
+    await runner.close();
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    rmSync(temp, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  // Non-git workspace omits workspaceChanges
+  const nonGitRes = await runAgy(
+    { prompt: "empty", workspace: temp },
+    config,
+    runner,
+  );
+  assert.equal(nonGitRes.status, "EMPTY_RESPONSE");
+  assert.equal(nonGitRes.workspaceChanges, undefined);
+
+  // Initialize git repo and create 55 untracked files
+  execFileSync("git", ["init"], { cwd: temp });
+  for (let i = 1; i <= 55; i++) {
+    writeFileSync(
+      path.join(temp, `file-${String(i).padStart(2, "0")}.txt`),
+      "x",
+    );
+  }
+
+  // Fallback 1: non-empty response on PERMISSION_DENIED is used directly
+  const deniedWithResponse = await runAgy(
+    { prompt: "denied", workspace: temp },
+    config,
+    runner,
+  );
+  assert.equal(deniedWithResponse.status, "PERMISSION_DENIED");
+  assert.equal(deniedWithResponse.partialResponse, deniedWithResponse.response);
+  assert.equal(deniedWithResponse.workspaceChanges?.length, 50);
+  assert.match(deniedWithResponse.workspaceChanges[0], /^\?\? file-01\.txt$/);
+
+  // Fallback 2: empty response falls back to readLastPlannerText from transcript
+  const convId = randomUUID();
+  const tFile = transcriptPath(convId, tempHome);
+  mkdirSync(path.dirname(tFile), { recursive: true });
+  writeFileSync(
+    tFile,
+    JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      created_at: new Date().toISOString(),
+      content: "Planner stopped after step 1",
+    }) + "\n",
+  );
+
+  const timeoutWithPlanner = await runAgy(
+    { prompt: "print-timeout", workspace: temp, conversationId: convId },
+    config,
+    runner,
+  );
+  assert.equal(timeoutWithPlanner.status, "TIMEOUT");
+  assert.equal(
+    timeoutWithPlanner.partialResponse,
+    "Planner stopped after step 1",
+  );
+  assert.equal(timeoutWithPlanner.workspaceChanges?.length, 50);
+});
+
+test("runAgy sets guard env, emits missing-guard and prompt preflight warnings, and suppresses guard warning when installed", async (t) => {
+  const tempHome = mkdtempSync(path.join(os.tmpdir(), "agy-home-guard-"));
+  const prevHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  const runner = new ProcessRunner();
+  t.after(async () => {
+    await runner.close();
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  const guardOnConfig = loadConfig({
+    AGY_MCP_BIN: fixture,
+    AGY_MCP_GUARD: "on",
+    AGY_MCP_ENV_ISOLATION: "off",
+  });
+
+  const missingRes = await runAgy(
+    { prompt: "Run `git push`", workspace: process.cwd() },
+    guardOnConfig,
+    runner,
+  );
+  assert.equal(missingRes.ok, true);
+  const missingPayload = JSON.parse(missingRes.response);
+  assert.equal(missingPayload.env.AGY_ORCH_MCP_GUARD, "1");
+  assert.ok(
+    missingRes.preflightWarnings?.some((w) =>
+      w.includes("`git push` matches deny rule `command(git push)`"),
+    ),
+  );
+  assert.ok(
+    missingRes.preflightWarnings?.includes(
+      "agy-orch-mcp guard hook is missing; run `agy-orch-mcp --install-guard` to enable command guarding.",
+    ),
+  );
+
+  // Install the guard hook into a second temp HOME and verify warning disappears
+  const installedHome = mkdtempSync(
+    path.join(os.tmpdir(), "agy-home-installed-"),
+  );
+  t.after(() => rmSync(installedHome, { recursive: true, force: true }));
+  process.env.HOME = installedHome;
+  const hookScriptPath = fileURLToPath(
+    new URL("../dist/guard-hook.js", import.meta.url),
+  );
+  installGuard(
+    defaultHooksPath(installedHome),
+    guardHookCommand(process.execPath, hookScriptPath),
+  );
+
+  const installedRes = await runAgy(
+    { prompt: "plain text prompt", workspace: process.cwd() },
+    guardOnConfig,
+    runner,
+  );
+  assert.equal(installedRes.preflightWarnings, undefined);
+
+  // Guard off omits AGY_ORCH_MCP_GUARD env
+  const guardOffConfig = loadConfig({
+    AGY_MCP_BIN: fixture,
+    AGY_MCP_GUARD: "off",
+    AGY_MCP_ENV_ISOLATION: "off",
+  });
+  const offRes = await runAgy(
+    { prompt: "plain text prompt", workspace: process.cwd() },
+    guardOffConfig,
+    runner,
+  );
+  assert.equal(JSON.parse(offRes.response).env.AGY_ORCH_MCP_GUARD, undefined);
+});
+
+test("runAgy manages isolated env roots: pending rename on new turn, remove if target exists, reuse on continuation", async (t) => {
+  const tempEnvRoot = mkdtempSync(path.join(os.tmpdir(), "agy-env-root-"));
+  const runner = new ProcessRunner();
+  t.after(async () => {
+    await runner.close();
+    rmSync(tempEnvRoot, { recursive: true, force: true });
+  });
+
+  const isoConfig = loadConfig({
+    AGY_MCP_BIN: fixture,
+    AGY_MCP_ENV_ISOLATION: "full",
+    AGY_MCP_ENV_ROOT: tempEnvRoot,
+    AGY_MCP_GUARD: "off",
+  });
+
+  // New turn creates pending-<id> and renames to <envRoot>/<conversation_id>
+  const first = await runAgy(
+    { prompt: "new-turn", workspace: process.cwd() },
+    isoConfig,
+    runner,
+  );
+  assert.equal(first.ok, true);
+  assert.ok(first.conversationId);
+  const firstPayload = JSON.parse(first.response);
+  assert.match(firstPayload.env.GOBIN, /pending-/);
+  const convDir = path.join(tempEnvRoot, first.conversationId);
+  assert.equal(existsSync(convDir), true);
+  assert.deepEqual(readdirSync(tempEnvRoot), [first.conversationId]);
+
+  // Continuing turn reuses <envRoot>/<conversation_id>
+  const cont = await runAgy(
+    {
+      prompt: "continue-turn",
+      workspace: process.cwd(),
+      conversationId: first.conversationId,
+    },
+    isoConfig,
+    runner,
+  );
+  assert.equal(cont.ok, true);
+  const contPayload = JSON.parse(cont.response);
+  assert.equal(contPayload.env.GOBIN, path.join(convDir, "go", "bin"));
+
+  // If <envRoot>/<conversation_id> already exists when a new turn finishes, pending dir is removed
+  const preExistingId = randomUUID();
+  mkdirSync(path.join(tempEnvRoot, preExistingId, "marker"), {
+    recursive: true,
+  });
+  const fakeCollisionRunner = {
+    run: async (opts) => {
+      assert.match(opts.env.GOBIN, /pending-/);
+      return {
+        stdout: JSON.stringify({
+          event: "result",
+          result: {
+            status: "SUCCESS",
+            response: "ok",
+            conversation_id: preExistingId,
+          },
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    },
+  };
+  await runAgy(
+    { prompt: "collision", workspace: process.cwd() },
+    isoConfig,
+    fakeCollisionRunner,
+  );
+  const remaining = readdirSync(tempEnvRoot);
+  assert.equal(
+    remaining.some((name) => name.startsWith("pending-")),
+    false,
+  );
+  assert.equal(
+    existsSync(path.join(tempEnvRoot, preExistingId, "marker")),
+    true,
+  );
+});
+
+test("runAgy structuredHandoff parses valid handoff and records handoffError on invalid handoff, and forwards queue options", async (t) => {
+  const runner = new ProcessRunner();
+  t.after(() => runner.close());
+
+  const validRes = await runAgy(
+    {
+      prompt: "handoff-ok",
+      workspace: process.cwd(),
+      structuredHandoff: true,
+    },
+    config,
+    runner,
+  );
+  assert.equal(validRes.ok, true);
+  assert.equal(validRes.handoffError, undefined);
+  assert.equal(validRes.handoff?.summary, "completed task");
+
+  const invalidRes = await runAgy(
+    {
+      prompt: "not-a-handoff",
+      workspace: process.cwd(),
+      structuredHandoff: true,
+    },
+    config,
+    runner,
+  );
+  assert.equal(invalidRes.ok, true);
+  assert.equal(invalidRes.handoff, undefined);
+  assert.match(invalidRes.handoffError, /handoff\.summary/);
+
+  const queuedPositions = [];
+  const fakeQueuedRunner = {
+    run: async (opts) => {
+      assert.equal(opts.queueTimeoutMs, 4_500);
+      opts.onQueued?.(2);
+      return {
+        stdout: JSON.stringify({
+          event: "result",
+          result: {
+            status: "SUCCESS",
+            response: "queued ok",
+            conversation_id: randomUUID(),
+          },
+        }),
+        stderr: "",
+        exitCode: 0,
+        queuedMs: 1_250,
+      };
+    },
+  };
+  const queuedRes = await runAgy(
+    {
+      prompt: "queued",
+      workspace: process.cwd(),
+      queueTimeoutMs: 4_500,
+      onQueued: (pos) => queuedPositions.push(pos),
+    },
+    config,
+    fakeQueuedRunner,
+  );
+  assert.equal(queuedRes.ok, true);
+  assert.deepEqual(queuedPositions, [2]);
+  assert.equal(queuedRes.queueWaitSeconds, 1.25);
+});

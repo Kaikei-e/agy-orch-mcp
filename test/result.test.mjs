@@ -43,6 +43,10 @@ test("toToolResult emits new snake_case keys and passes richer context through a
       status: "SUCCESS",
       response: "done",
       exitCode: 0,
+      resumable: true,
+      terminatedTasks: [{ id: "conv/task-2", description: "sleep 40" }],
+      turnSeconds: 12.3,
+      workspaceChanges: [" M src/agy.ts", "?? test/new.test.mjs"],
       verifiedOutputs: records,
       partialResponse: "partial text",
       preflightWarnings: ["warn-1", "warn-2"],
@@ -56,6 +60,15 @@ test("toToolResult emits new snake_case keys and passes richer context through a
 
   const data = res.structuredContent;
   assert.deepEqual(JSON.parse(res.content[0].text), data);
+  assert.equal(data.resumable, true);
+  assert.deepEqual(data.terminated_tasks, [
+    { id: "conv/task-2", description: "sleep 40" },
+  ]);
+  assert.equal(data.turn_seconds, 12.3);
+  assert.deepEqual(data.workspace_changes, [
+    " M src/agy.ts",
+    "?? test/new.test.mjs",
+  ]);
   assert.deepEqual(data.verified_outputs, records);
   assert.equal(data.partial_response, "partial text");
   assert.deepEqual(data.preflight_warnings, ["warn-1", "warn-2"]);
@@ -270,6 +283,34 @@ test("shortening order and hard limit guarantee with large inputs", () => {
   assert.equal(
     preservedResponse.structuredContent.response,
     "keep this full response",
+  );
+
+  // workspace_changes is dropped before response truncation if needed
+  const dropWorkspaceChanges = toToolResult(
+    {
+      ok: false,
+      status: "TIMEOUT",
+      response: "keep this response intact",
+      exitCode: 3,
+      workspaceChanges: Array.from(
+        { length: 40 },
+        (_, i) => ` M src/long-file-name-${i}.ts`,
+      ),
+    },
+    600,
+  );
+  assert.ok(dropWorkspaceChanges.content[0].text.length <= 600);
+  assert.equal(
+    dropWorkspaceChanges.structuredContent.workspace_changes,
+    undefined,
+  );
+  assert.equal(
+    dropWorkspaceChanges.structuredContent.workspace_changes_omitted,
+    true,
+  );
+  assert.equal(
+    dropWorkspaceChanges.structuredContent.response,
+    "keep this response intact",
   );
 
   // Hard limit respected when every field is huge

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../dist/config.js";
 
@@ -121,4 +123,77 @@ test("loadConfig rejects contradictory flags that would publish neither tool in 
       AGY_MCP_ENABLE_FETCH: "false",
     });
   }, /Contradictory configuration.*publish neither tool/);
+});
+
+test("loadConfig parses guard, envIsolation, tasks, and envRoot with defaults and strict validation", () => {
+  const defaults = loadConfig({
+    AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+  });
+  assert.equal(defaults.guard, true);
+  assert.equal(defaults.envIsolation, "full");
+  assert.equal(defaults.tasks, true);
+  assert.equal(
+    defaults.envRoot,
+    path.join(os.homedir(), ".local", "state", "agy-orch", "env"),
+  );
+
+  const xdg = loadConfig({
+    AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+    XDG_STATE_HOME: "/tmp/custom-xdg-state",
+    AGY_MCP_GUARD: "off",
+    AGY_MCP_ENV_ISOLATION: "install",
+    AGY_MCP_TASKS: "off",
+  });
+  assert.equal(xdg.guard, false);
+  assert.equal(xdg.envIsolation, "install");
+  assert.equal(xdg.tasks, false);
+  assert.equal(
+    xdg.envRoot,
+    path.join("/tmp/custom-xdg-state", "agy-orch", "env"),
+  );
+
+  const customRoot = loadConfig({
+    AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+    AGY_MCP_GUARD: "on",
+    AGY_MCP_ENV_ISOLATION: "off",
+    AGY_MCP_TASKS: "auto",
+    AGY_MCP_ENV_ROOT: "/tmp/custom-env-root",
+  });
+  assert.equal(customRoot.guard, true);
+  assert.equal(customRoot.envIsolation, "off");
+  assert.equal(customRoot.tasks, true);
+  assert.equal(customRoot.envRoot, path.resolve("/tmp/custom-env-root"));
+
+  assert.throws(
+    () =>
+      loadConfig({
+        AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+        AGY_MCP_GUARD: "true",
+      }),
+    /AGY_MCP_GUARD/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+        AGY_MCP_ENV_ISOLATION: "sandbox",
+      }),
+    /AGY_MCP_ENV_ISOLATION/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+        AGY_MCP_TASKS: "on",
+      }),
+    /AGY_MCP_TASKS/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+        AGY_MCP_ENV_ROOT: "   ",
+      }),
+    /AGY_MCP_ENV_ROOT/,
+  );
 });

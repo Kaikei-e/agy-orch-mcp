@@ -9,8 +9,10 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildArgs, parseAgyOutput } from "../dist/agy.js";
+import { MAX_TURN_SECONDS, buildArgs, parseAgyOutput } from "../dist/agy.js";
 import { loadConfig, resolveWorkspace } from "../dist/config.js";
+import { sessionSettingsJson } from "../dist/guard.js";
+import { HANDOFF_JSON_SCHEMA } from "../dist/handoff-schema.js";
 import { toToolResult } from "../dist/result.js";
 
 test("configuration validates numeric limits and booleans", () => {
@@ -129,6 +131,7 @@ test("canonical paths reject traversal, sibling prefixes and escaping symlinks",
 });
 
 test("argv keeps prompts literal and permission bypass opt-in", () => {
+  assert.equal(MAX_TURN_SECONDS, 900);
   const options = {
     prompt: '/skill; $(touch bad) `echo no` "quoted"\nnext',
     workspace: "/tmp/space dir",
@@ -138,6 +141,21 @@ test("argv keeps prompts literal and permission bypass opt-in", () => {
   assert.ok(args.includes("--disable-slash-commands"));
   assert.ok(!args.includes("--dangerously-skip-permissions"));
   assert.equal(args[args.indexOf("--mode") + 1], "plan");
+  assert.equal(args[args.indexOf("--print-timeout") + 1], "900s");
+  assert.equal(args[args.indexOf("--settings") + 1], sessionSettingsJson());
+  assert.ok(!args.includes("--json-schema"));
+
+  const capped = buildArgs({
+    ...options,
+    timeoutSec: 1800,
+    structuredHandoff: true,
+  });
+  assert.equal(capped[capped.indexOf("--print-timeout") + 1], "900s");
+  assert.equal(
+    capped[capped.indexOf("--json-schema") + 1],
+    JSON.stringify(HANDOFF_JSON_SCHEMA),
+  );
+
   const continued = buildArgs({
     ...options,
     conversationId: "test-id",
@@ -150,11 +168,14 @@ test("argv keeps prompts literal and permission bypass opt-in", () => {
   assert.ok(!continued.includes("--continue"));
   assert.ok(continued.includes("--sandbox"));
   assert.ok(continued.includes("42s"));
-  assert.ok(
-    buildArgs({ ...options, autonomy: "full" }).includes(
-      "--dangerously-skip-permissions",
-    ),
+  assert.equal(
+    continued[continued.indexOf("--settings") + 1],
+    sessionSettingsJson(),
   );
+
+  const fullArgs = buildArgs({ ...options, autonomy: "full" });
+  assert.ok(fullArgs.includes("--dangerously-skip-permissions"));
+  assert.ok(!fullArgs.includes("--settings"));
 });
 
 test("parsing supports direct JSON and stream results with trailing logs", () => {
