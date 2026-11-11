@@ -690,6 +690,10 @@ test("runAgy sets guard env, emits missing-guard and prompt preflight warnings, 
   assert.equal(missingRes.ok, true);
   const missingPayload = JSON.parse(missingRes.response);
   assert.equal(missingPayload.env.AGY_ORCH_MCP_GUARD, "1");
+  assert.equal(
+    missingPayload.env.AGY_ORCH_MCP_SUBAGENT_MODEL,
+    "gemini-4-argon-medium",
+  );
   assert.ok(
     missingRes.preflightWarnings?.some((w) =>
       w.includes("`git push` matches deny rule `command(git push)`"),
@@ -733,7 +737,12 @@ test("runAgy sets guard env, emits missing-guard and prompt preflight warnings, 
     guardOffConfig,
     runner,
   );
-  assert.equal(JSON.parse(offRes.response).env.AGY_ORCH_MCP_GUARD, undefined);
+  const offPayload = JSON.parse(offRes.response);
+  assert.equal(offPayload.env.AGY_ORCH_MCP_GUARD, undefined);
+  assert.equal(
+    offPayload.env.AGY_ORCH_MCP_SUBAGENT_MODEL,
+    "gemini-4-argon-medium",
+  );
 });
 
 test("runAgy manages isolated env roots: pending rename on new turn, remove if target exists, reuse on continuation", async (t) => {

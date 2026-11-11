@@ -662,7 +662,7 @@ test("MCP env-model precedence on antigravity_run and antigravity_continue", asy
   );
   assert.ok(!contOverrideArgv.includes("default-test-model"));
 
-  // Pair without AGY_MCP_DEFAULT_MODEL uses built-in default (gemini-4-argon-high)
+  // Pair without AGY_MCP_DEFAULT_MODEL uses built-in default (gemini-4-carbon-high)
   const pairWithoutDefault = await connected();
   t.after(() => closePair(pairWithoutDefault));
 
@@ -673,11 +673,16 @@ test("MCP env-model precedence on antigravity_run and antigravity_continue", asy
   });
   const runNoModelVal = valueOf(runNoModel);
   assert.equal(runNoModelVal.ok, true);
-  const runNoModelArgv = JSON.parse(runNoModelVal.response).argv;
+  const runNoModelParsed = JSON.parse(runNoModelVal.response);
+  const runNoModelArgv = runNoModelParsed.argv;
   assert.ok(runNoModelArgv.includes("--model"));
   assert.equal(
     runNoModelArgv[runNoModelArgv.indexOf("--model") + 1],
-    "gemini-4-argon-high",
+    "gemini-4-carbon-high",
+  );
+  assert.equal(
+    runNoModelParsed.env.AGY_ORCH_MCP_SUBAGENT_MODEL,
+    "gemini-4-argon-medium",
   );
 
   // 6. Built-in default model passed on antigravity_continue when neither env nor argument set
@@ -696,7 +701,7 @@ test("MCP env-model precedence on antigravity_run and antigravity_continue", asy
   assert.ok(contNoModelArgv.includes("--model"));
   assert.equal(
     contNoModelArgv[contNoModelArgv.indexOf("--model") + 1],
-    "gemini-4-argon-high",
+    "gemini-4-carbon-high",
   );
 });
 

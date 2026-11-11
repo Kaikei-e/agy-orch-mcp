@@ -341,6 +341,8 @@ if (args[0] === "--version") {
                 stdinIsTTY: Boolean(process.stdin.isTTY),
                 env: {
                   AGY_ORCH_MCP_GUARD: process.env.AGY_ORCH_MCP_GUARD,
+                  AGY_ORCH_MCP_SUBAGENT_MODEL:
+                    process.env.AGY_ORCH_MCP_SUBAGENT_MODEL,
                   GOBIN: process.env.GOBIN,
                   GOPATH: process.env.GOPATH,
                 },

@@ -25,7 +25,7 @@ When delegating a task to `antigravity_run`, scope each turn to `<= 15` minutes 
 
 ## Execution & Recovery Guidelines
 
-- **Guard Installation**: Install the command guard once via `agy-orch-mcp --install-guard` and check status with `agy-orch-mcp --doctor`.
+- **Guard Installation**: Install the command guard and subagent model hook once via `agy-orch-mcp --install-guard` and check status with `agy-orch-mcp --doctor` (built-in defaults: `AGY_MCP_DEFAULT_MODEL=gemini-4-carbon-high`, `AGY_MCP_SUBAGENT_MODEL=gemini-4-argon-medium`).
 - **Self-Testing**: Workers must run project test suites and resolve issues within the agy session before completing.
 - **Continuation**: Use `antigravity_continue` (with the required `conversation_id`) only for direct follow-ups to the same conversation or to resume a `TIMEOUT` turn. Start every independent task with a new `antigravity_run` (including when `context.rotate_recommended` is `true`).
 - **Choosing a parallel strategy** (by task type, not by host):

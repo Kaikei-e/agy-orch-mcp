@@ -7,6 +7,7 @@ import type { Config } from "./config.js";
 import {
   FIXED_DENY_RULES,
   GUARD_ENV,
+  SUBAGENT_MODEL_ENV,
   defaultHooksPath,
   guardHookCommand,
   guardStatus,
@@ -300,6 +301,9 @@ export async function runAgy(
       : {}),
     ...(resolvedOptions.autonomy !== "full" && config.guard
       ? { [GUARD_ENV]: "1" }
+      : {}),
+    ...(config.subagentModel
+      ? { [SUBAGENT_MODEL_ENV]: config.subagentModel }
       : {}),
   };
 

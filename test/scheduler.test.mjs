@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { executeBatch } from "../dist/runtime/scheduler.js";
+import { loadConfig } from "../dist/config.js";
 import { ArtifactStore } from "../dist/artifacts/store.js";
 import { GitRepository } from "../dist/workspace/git-repository.js";
 import { DEFAULT_SERVER_LIMITS } from "../dist/domain/limits.js";
@@ -1218,6 +1219,133 @@ test("Runtime Scheduler Suite", async (t) => {
         });
         assert.strictEqual(outcome.outcome, "succeeded");
         assert.strictEqual(outcome.provenance.source, "events_jsonl");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  await t.test(
+    "Escalates SEMANTIC_FAILURE from fast (gemini-4-argon-medium) to reasoning (gemini-4-carbon-high) under loadConfig defaults",
+    async () => {
+      const { tmpDir, baseRev } = await createTempRepo();
+      try {
+        const storageDir = path.join(tmpDir, ".git", "agy-orch");
+        const config = loadConfig({
+          AGY_MCP_DEFAULT_WORKSPACE: tmpDir,
+          AGY_ORCH_STORAGE_DIR: storageDir,
+        });
+        const store = new ArtifactStore(tmpDir, storageDir, config.limits);
+        const observedTiers = [];
+
+        const mockWorker = {
+          async execute(req) {
+            observedTiers.push(req.tier);
+            if (req.tier === "fast") {
+              return {
+                status: "failed",
+                failureClass: "SEMANTIC_FAILURE",
+                stdout: "SEMANTIC_FAILURE: acceptance check not satisfied",
+                stderr: "",
+                exitCode: 1,
+                message: "Semantic failure on fast tier",
+              };
+            }
+            await fs.writeFile(
+              path.join(req.workspace, "src", "escalated.js"),
+              "export const ok = true;\n",
+            );
+            return {
+              status: "succeeded",
+              stdout: "Succeeded on reasoning tier",
+              stderr: "",
+              exitCode: 0,
+            };
+          },
+        };
+
+        const response = await executeBatch(
+          {
+            schema_version: "1",
+            workspace: {
+              root: tmpDir,
+              base_revision: baseRev,
+              dirty_policy: "reject",
+            },
+            tasks: [
+              {
+                id: "task-escalate",
+                objective: "Implement escalated feature",
+                scope: { include: ["src/**"] },
+                owns: ["src/escalated.js"],
+              },
+            ],
+            gates: [],
+          },
+          { config, store, worker: mockWorker },
+        );
+
+        assert.strictEqual(response.status, "succeeded");
+        assert.deepStrictEqual(observedTiers, ["fast", "reasoning"]);
+        assert.strictEqual(response.metrics.escalations, 1);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  await t.test(
+    "Blocks false same-model escalation when fastModel equals defaultModel and reasoningModel is unset",
+    async () => {
+      const { tmpDir, baseRev } = await createTempRepo();
+      try {
+        const storageDir = path.join(tmpDir, ".git", "agy-orch");
+        const config = loadConfig({
+          AGY_MCP_DEFAULT_WORKSPACE: tmpDir,
+          AGY_ORCH_STORAGE_DIR: storageDir,
+          AGY_MCP_FAST_MODEL: "gemini-4-carbon-high",
+        });
+        const store = new ArtifactStore(tmpDir, storageDir, config.limits);
+        const observedTiers = [];
+
+        const mockWorker = {
+          async execute(req) {
+            observedTiers.push(req.tier);
+            return {
+              status: "failed",
+              failureClass: "SEMANTIC_FAILURE",
+              stdout: "SEMANTIC_FAILURE: acceptance check not satisfied",
+              stderr: "",
+              exitCode: 1,
+              message: "Semantic failure on fast tier",
+            };
+          },
+        };
+
+        const response = await executeBatch(
+          {
+            schema_version: "1",
+            workspace: {
+              root: tmpDir,
+              base_revision: baseRev,
+              dirty_policy: "reject",
+            },
+            tasks: [
+              {
+                id: "task-no-false-escalate",
+                objective: "Should not escalate to identical model",
+                scope: { include: ["src/**"] },
+                owns: ["src/escalated.js"],
+              },
+            ],
+            gates: [],
+          },
+          { config, store, worker: mockWorker },
+        );
+
+        assert.strictEqual(response.status, "failed");
+        assert.deepStrictEqual(observedTiers, ["fast"]);
+        assert.strictEqual(response.metrics.escalations, 0);
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
       }

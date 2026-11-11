@@ -12,8 +12,9 @@ test("loadConfig provides safe defaults with batch disabled and all tool surface
   assert.equal(config.enableBatch, false);
   assert.equal(config.enableFetch, false);
   assert.equal(config.toolSurface, "all");
-  assert.equal(config.defaultModel, "gemini-4-argon-high");
-  assert.equal(config.fastModel, undefined);
+  assert.equal(config.defaultModel, "gemini-4-carbon-high");
+  assert.equal(config.subagentModel, "gemini-4-argon-medium");
+  assert.equal(config.fastModel, "gemini-4-argon-medium");
   assert.equal(config.reasoningModel, undefined);
   assert.equal(config.allowFullAutonomy, false);
   assert.equal(config.maxConcurrent, 8);
@@ -61,18 +62,41 @@ test("loadConfig rejects invalid AGY_MCP_TOOL_SURFACE", () => {
   }, /AGY_MCP_TOOL_SURFACE must be 'all', 'compat', or 'batch'/);
 });
 
-test("loadConfig validates and populates fastModel and reasoningModel tiers", () => {
+test("loadConfig validates and populates subagentModel, fastModel, and reasoningModel tiers", () => {
+  const inheritedFast = loadConfig({
+    AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+    AGY_MCP_SUBAGENT_MODEL: "gemini-3.8-flash-medium",
+  });
+  assert.equal(inheritedFast.subagentModel, "gemini-3.8-flash-medium");
+  assert.equal(inheritedFast.fastModel, "gemini-3.8-flash-medium");
+
   const config = loadConfig({
     AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+    AGY_MCP_SUBAGENT_MODEL: "gemini-4-argon-medium",
     AGY_MCP_FAST_MODEL: "gemini-2.5-flash",
     AGY_MCP_REASONING_MODEL: "gemini-2.5-pro",
   });
 
+  assert.equal(config.subagentModel, "gemini-4-argon-medium");
   assert.equal(config.fastModel, "gemini-2.5-flash");
   assert.equal(config.reasoningModel, "gemini-2.5-pro");
 });
 
-test("loadConfig rejects invalid model slug for tier models", () => {
+test("loadConfig rejects invalid model slug for subagent and tier models", () => {
+  assert.throws(() => {
+    loadConfig({
+      AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+      AGY_MCP_SUBAGENT_MODEL: "-invalid-subagent-slug",
+    });
+  }, /must not contain whitespace, NUL, or start with a dash/);
+
+  assert.throws(() => {
+    loadConfig({
+      AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
+      AGY_MCP_SUBAGENT_MODEL: "",
+    });
+  }, /AGY_MCP_SUBAGENT_MODEL must be between 1 and 200 characters/);
+
   assert.throws(() => {
     loadConfig({
       AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),

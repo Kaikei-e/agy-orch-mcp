@@ -638,11 +638,20 @@ test("Routing Policy - Model Resolution & Tier Selection", () => {
   assert.equal(explicit.effort, "high");
   assert.equal(explicit.isExplicit, true);
 
-  // Fast tier uses low effort
-  const fastRes = resolveWorkerModel("fast", config);
-  assert.equal(fastRes.model, "default-gemini");
-  assert.equal(fastRes.effort, "low");
-  assert.equal(fastRes.isExplicit, false);
+  // Fast tier defaults to subagentModel / fastModel (gemini-4-argon-medium)
+  const defaultFastRes = resolveWorkerModel("fast", config);
+  assert.equal(defaultFastRes.model, "gemini-4-argon-medium");
+  assert.equal(defaultFastRes.effort, undefined);
+  assert.equal(defaultFastRes.isExplicit, false);
+
+  // Fast tier falls back to defaultModel with low effort when fastModel is unset
+  const fastFallbackRes = resolveWorkerModel("fast", {
+    ...config,
+    fastModel: undefined,
+  });
+  assert.equal(fastFallbackRes.model, "default-gemini");
+  assert.equal(fastFallbackRes.effort, "low");
+  assert.equal(fastFallbackRes.isExplicit, false);
 
   // Reasoning tier uses high effort and reports limitation notice when reasoningModel is absent
   const reasoningRes = resolveWorkerModel("reasoning", config);
@@ -662,19 +671,22 @@ test("Routing Policy - Model Resolution & Tier Selection", () => {
 });
 
 test("Routing Policy - resolveWorkerModel omits effort when model slug ends with effort suffix", () => {
-  const defaultArgonConfig = loadConfig({
+  const defaultModelsConfig = loadConfig({
     AGY_MCP_DEFAULT_WORKSPACE: process.cwd(),
-    AGY_MCP_DEFAULT_MODEL: "gemini-4-argon-high",
   });
 
-  const argonFast = resolveWorkerModel("fast", defaultArgonConfig);
-  assert.equal(argonFast.model, "gemini-4-argon-high");
+  const argonFast = resolveWorkerModel("fast", defaultModelsConfig);
+  assert.equal(argonFast.model, "gemini-4-argon-medium");
   assert.equal(argonFast.effort, undefined);
+
+  const carbonReasoning = resolveWorkerModel("reasoning", defaultModelsConfig);
+  assert.equal(carbonReasoning.model, "gemini-4-carbon-high");
+  assert.equal(carbonReasoning.effort, undefined);
 
   for (const suffix of ["-low", "-medium", "-high", "-xhigh", "-max"]) {
     const res = resolveWorkerModel(
       "fast",
-      defaultArgonConfig,
+      defaultModelsConfig,
       `custom-model${suffix}`,
     );
     assert.equal(res.model, `custom-model${suffix}`);
@@ -683,7 +695,7 @@ test("Routing Policy - resolveWorkerModel omits effort when model slug ends with
 
   const plainReasoning = resolveWorkerModel(
     "reasoning",
-    defaultArgonConfig,
+    defaultModelsConfig,
     "plain-slug",
   );
   assert.equal(plainReasoning.model, "plain-slug");
@@ -691,7 +703,7 @@ test("Routing Policy - resolveWorkerModel omits effort when model slug ends with
 
   const plainFast = resolveWorkerModel(
     "fast",
-    defaultArgonConfig,
+    defaultModelsConfig,
     "plain-slug",
   );
   assert.equal(plainFast.model, "plain-slug");

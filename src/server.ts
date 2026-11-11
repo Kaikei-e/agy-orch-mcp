@@ -407,11 +407,16 @@ export function createServer(config: Config, runner: ProcessRunner): McpServer {
   }
 
   if (config.enableBatch) {
+    const fastTierModel =
+      config.fastModel ?? config.defaultModel ?? DEFAULT_MODEL;
+    const reasoningTierModel =
+      config.reasoningModel ?? config.defaultModel ?? DEFAULT_MODEL;
     const batchDescription =
       `Execute a DAG of isolated tasks and verification gates with bounded retry. ` +
       `Each task runs in an isolated git worktree, and the workspace must be a clean git tree. ` +
       `Integrated changes are stored as a final patch artifact (final.patch) rather than applied directly to the host workspace. ` +
       `Task owns patterns must be strictly within scope.include and disjoint from scope.exclude. ` +
+      `Worker tiers default to fast (${fastTierModel}) and escalate to reasoning (${reasoningTierModel}). ` +
       `Effective limits: up to ${config.limits.maxTasks} tasks, ${config.limits.maxGates} gates, ` +
       `${config.limits.maxParallelism} parallel tasks, ${config.limits.maxWorkerCalls} worker calls, ` +
       `and ${config.limits.maxWallTimeMs}ms (${Math.round(config.limits.maxWallTimeMs / 60_000)} min) wall time. ` +

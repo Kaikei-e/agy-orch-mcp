@@ -17,12 +17,15 @@ import {
   FIXED_DENY_RULES,
   GUARD_ENV,
   GUARD_HOOK_NAME,
+  SUBAGENT_MODEL_ENV,
   defaultHooksPath,
   evaluateCommand,
   guardHookCommand,
   guardStatus,
   installGuard,
+  resolveSubagentTier,
   sessionSettingsJson,
+  subagentSessionMessage,
   uninstallGuard,
 } from "../dist/guard.js";
 
@@ -265,6 +268,7 @@ test("evaluateCommand unwraps shell -c scripts and transparent wrappers (xargs, 
 
 test("guardHookCommand formats env-gated POSIX sh command and quotes paths with spaces and single quotes", () => {
   assert.equal(GUARD_ENV, "AGY_ORCH_MCP_GUARD");
+  assert.equal(SUBAGENT_MODEL_ENV, "AGY_ORCH_MCP_SUBAGENT_MODEL");
   assert.equal(GUARD_HOOK_NAME, "agy-orch-mcp-guard");
   assert.equal(
     defaultHooksPath("/tmp/fake-home"),
@@ -277,7 +281,7 @@ test("guardHookCommand formats env-gated POSIX sh command and quotes paths with 
   );
   assert.equal(
     cmd,
-    `if [ -n "$AGY_ORCH_MCP_GUARD" ]; then exec '/usr/local/bin/node' '/opt/my app/it'\\''s/guard-hook.js'; else cat >/dev/null; fi`,
+    `if [ -n "$AGY_ORCH_MCP_GUARD" ] || [ -n "$AGY_ORCH_MCP_SUBAGENT_MODEL" ]; then exec '/usr/local/bin/node' '/opt/my app/it'\\''s/guard-hook.js'; else cat >/dev/null; fi`,
   );
 });
 
@@ -359,9 +363,18 @@ test("installGuard, guardStatus, and uninstallGuard manage hooks.json safely wit
       ],
     });
     assert.deepEqual(merged[GUARD_HOOK_NAME], {
+      SessionStart: [{ type: "command", command: cmd1, timeout: 10 }],
       PreToolUse: [
         {
           matcher: "run_command",
+          hooks: [{ type: "command", command: cmd1, timeout: 10 }],
+        },
+        {
+          matcher: "swarm",
+          hooks: [{ type: "command", command: cmd1, timeout: 10 }],
+        },
+        {
+          matcher: "invoke_subagent",
           hooks: [{ type: "command", command: cmd1, timeout: 10 }],
         },
       ],
@@ -413,6 +426,7 @@ test("guardHookCommand end-to-end via sh -c enforces when AGY_ORCH_MCP_GUARD=1 a
 
   const abstainedEnv = { ...process.env };
   delete abstainedEnv[GUARD_ENV];
+  delete abstainedEnv[SUBAGENT_MODEL_ENV];
   const abstainedRes = spawnSync("sh", ["-c", shCommand], {
     input: stdinPayload,
     encoding: "utf8",
@@ -420,13 +434,171 @@ test("guardHookCommand end-to-end via sh -c enforces when AGY_ORCH_MCP_GUARD=1 a
   });
   assert.equal(abstainedRes.status, 0);
   assert.equal(abstainedRes.stdout, "");
+
+  // When only AGY_ORCH_MCP_SUBAGENT_MODEL is set (AGY_ORCH_MCP_GUARD unset),
+  // run_command events abstain cleanly without enforcing command guard.
+  const subagentOnlyEnv = {
+    ...abstainedEnv,
+    [SUBAGENT_MODEL_ENV]: "gemini-4-argon-medium",
+  };
+  const subagentOnlyCmdRes = spawnSync("sh", ["-c", shCommand], {
+    input: stdinPayload,
+    encoding: "utf8",
+    env: subagentOnlyEnv,
+  });
+  assert.equal(subagentOnlyCmdRes.status, 0);
+  assert.equal(subagentOnlyCmdRes.stdout, "");
+});
+
+test("guard-hook enforces SessionStart systemMessage and PreToolUse subagent/swarm model overrides", () => {
+  assert.equal(resolveSubagentTier("gemini-4-argon-medium"), "pro");
+  assert.equal(resolveSubagentTier("gemini-3.8-flash-medium"), "flash");
+  assert.equal(resolveSubagentTier("gemini-3.8-flash-lite"), "flash_lite");
+  assert.match(
+    subagentSessionMessage("gemini-4-argon-medium"),
+    /gemini-4-argon-medium/,
+  );
+
+  const shCommand = guardHookCommand(process.execPath, hookScriptPath);
+  const env = {
+    ...process.env,
+    [GUARD_ENV]: "1",
+    [SUBAGENT_MODEL_ENV]: "gemini-4-argon-medium",
+  };
+  const runViaSh = (payload, customEnv = env) =>
+    spawnSync("sh", ["-c", shCommand], {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      env: customEnv,
+    });
+
+  // 1. SessionStart injects subagent/swarm model guidance
+  const sessionRes = runViaSh({
+    hookEventName: "SessionStart",
+    conversationId: "00000000-0000-4000-8000-000000000001",
+  });
+  assert.equal(sessionRes.status, 0);
+  const sessionJson = JSON.parse(sessionRes.stdout.trim());
+  assert.equal(sessionJson.injectSteps.length, 1);
+  assert.match(
+    sessionJson.injectSteps[0].systemMessage.systemMessage,
+    /gemini-4-argon-medium/,
+  );
+
+  // 2. swarm action=add without model -> overwrites model to subagentModel (including protojson-quoted args)
+  const swarmAddRes = runViaSh({
+    hookEventName: "PreToolUse",
+    toolCall: {
+      name: "swarm",
+      args: { action: JSON.stringify("add"), name: "worker", brief: "do work" },
+    },
+  });
+  assert.equal(swarmAddRes.status, 0);
+  assert.deepEqual(JSON.parse(swarmAddRes.stdout.trim()), {
+    decision: "allow",
+    overwrite: { model: "gemini-4-argon-medium" },
+  });
+
+  // 3. swarm action=add with explicit model -> abstains
+  const swarmExplicitRes = runViaSh({
+    hookEventName: "PreToolUse",
+    toolCall: {
+      name: "swarm",
+      args: { action: "add", model: "gemini-3.8-flash-low", name: "worker" },
+    },
+  });
+  assert.equal(swarmExplicitRes.status, 0);
+  assert.equal(swarmExplicitRes.stdout, "");
+
+  // 4. swarm action=model or status -> abstains
+  const swarmModelSwitchRes = runViaSh({
+    hookEventName: "PreToolUse",
+    toolCall: {
+      name: "swarm",
+      args: { action: "model", name: "worker" },
+    },
+  });
+  assert.equal(swarmModelSwitchRes.status, 0);
+  assert.equal(swarmModelSwitchRes.stdout, "");
+
+  // 5. invoke_subagent with omitted Model or "inherit" -> overwrites Model tier
+  for (const modelArg of [undefined, "inherit", JSON.stringify("inherit")]) {
+    const subagentRes = runViaSh({
+      hookEventName: "PreToolUse",
+      toolCall: {
+        name: "invoke_subagent",
+        args: {
+          TypeName: "research",
+          Role: "Researcher",
+          Prompt: "Find files",
+          ...(modelArg !== undefined ? { Model: modelArg } : {}),
+        },
+      },
+    });
+    assert.equal(subagentRes.status, 0);
+    assert.deepEqual(JSON.parse(subagentRes.stdout.trim()), {
+      decision: "allow",
+      overwrite: { Model: "pro" },
+    });
+  }
+
+  // 6. invoke_subagent with flash subagentModel -> overwrites Model to "flash"
+  const flashSubagentRes = runViaSh(
+    {
+      hookEventName: "PreToolUse",
+      toolCall: {
+        name: "invoke_subagent",
+        args: { TypeName: "research", Role: "Researcher", Prompt: "Quick" },
+      },
+    },
+    { ...env, [SUBAGENT_MODEL_ENV]: "gemini-3.8-flash-medium" },
+  );
+  assert.equal(flashSubagentRes.status, 0);
+  assert.deepEqual(JSON.parse(flashSubagentRes.stdout.trim()), {
+    decision: "allow",
+    overwrite: { Model: "flash" },
+  });
+
+  // 7. invoke_subagent with explicit non-inherit Model or image-generator -> abstains
+  const explicitTierRes = runViaSh({
+    hookEventName: "PreToolUse",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        TypeName: "research",
+        Role: "Researcher",
+        Prompt: "Quick",
+        Model: JSON.stringify("flash_lite"),
+      },
+    },
+  });
+  assert.equal(explicitTierRes.status, 0);
+  assert.equal(explicitTierRes.stdout, "");
+
+  const imageGenRes = runViaSh({
+    hookEventName: "PreToolUse",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        TypeName: JSON.stringify("image-generator"),
+        Role: "Artist",
+        Prompt: "Draw icon",
+      },
+    },
+  });
+  assert.equal(imageGenRes.status, 0);
+  assert.equal(imageGenRes.stdout, "");
 });
 
 test("guard-hook CLI processes stdin end-to-end and omits rule key", () => {
+  const cleanEnv = { ...process.env };
+  delete cleanEnv[GUARD_ENV];
+  delete cleanEnv[SUBAGENT_MODEL_ENV];
   const runHook = (input) =>
     spawnSync(process.execPath, [hookScriptPath], {
       input,
       encoding: "utf8",
+      env: cleanEnv,
     });
 
   const denyRes = runHook(

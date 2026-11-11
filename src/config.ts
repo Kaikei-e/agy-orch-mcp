@@ -9,13 +9,15 @@ import { DEFAULT_SERVER_LIMITS } from "./domain/limits.js";
 
 export type ToolSurface = "all" | "batch";
 
-export const DEFAULT_MODEL = "gemini-4-argon-high";
+export const DEFAULT_MODEL = "gemini-4-carbon-high";
+export const DEFAULT_SUBAGENT_MODEL = "gemini-4-argon-medium";
 
 export interface Config {
   bin: string;
   defaultWorkspace: string;
   allowedRoot?: string;
   defaultModel?: string;
+  subagentModel?: string;
   fastModel?: string;
   reasoningModel?: string;
   maxOutputChars: number;
@@ -144,6 +146,10 @@ export function loadConfig(
   }
 
   const maxConcurrent = integer(env, "AGY_MCP_MAX_CONCURRENT", 8, 1, 32);
+  const subagentModel = validateModelSlug(
+    env.AGY_MCP_SUBAGENT_MODEL ?? DEFAULT_SUBAGENT_MODEL,
+    "AGY_MCP_SUBAGENT_MODEL",
+  );
 
   const config: Config = {
     bin: bin.includes("/") || bin.includes("\\") ? path.resolve(cwd, bin) : bin,
@@ -158,7 +164,11 @@ export function loadConfig(
       env.AGY_MCP_DEFAULT_MODEL ?? DEFAULT_MODEL,
       "AGY_MCP_DEFAULT_MODEL",
     ),
-    fastModel: validateModelSlug(env.AGY_MCP_FAST_MODEL, "AGY_MCP_FAST_MODEL"),
+    subagentModel,
+    fastModel: validateModelSlug(
+      env.AGY_MCP_FAST_MODEL ?? subagentModel,
+      "AGY_MCP_FAST_MODEL",
+    ),
     reasoningModel: validateModelSlug(
       env.AGY_MCP_REASONING_MODEL,
       "AGY_MCP_REASONING_MODEL",

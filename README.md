@@ -35,7 +35,12 @@ Model selection resolves in the following order:
 
 1. The explicit `model` argument provided in the MCP tool call (`antigravity_run` or `antigravity_continue`).
 2. The server environment variable `AGY_MCP_DEFAULT_MODEL` (if set and non-empty).
-3. The server built-in default model (`gemini-4-argon-high`).
+3. The server built-in default model (`gemini-4-carbon-high`).
+
+Subagents and worker tiers resolve as follows:
+
+- `AGY_MCP_SUBAGENT_MODEL` defaults to `gemini-4-argon-medium`. When the `--install-guard` hook is installed, `agy` sessions spawned by `agy-orch-mcp` receive `SessionStart` guidance and `PreToolUse` enforcement (`swarm` `action: "add"` defaults to `AGY_MCP_SUBAGENT_MODEL`, and `invoke_subagent` `Model: "inherit"` / omitted is rewritten to the matching subagent tier).
+- In `antigravity_batch`, `fast` tier workers default to `AGY_MCP_FAST_MODEL` (falling back to `AGY_MCP_SUBAGENT_MODEL`, default `gemini-4-argon-medium`) and `reasoning` tier workers default to `AGY_MCP_REASONING_MODEL` (falling back to `AGY_MCP_DEFAULT_MODEL`, default `gemini-4-carbon-high`).
 
 Query available model slugs using `antigravity_models`, then cache or specify the desired slug.
 
@@ -51,9 +56,9 @@ The default request settings are `mode: "plan"` and `autonomy: "safe"`.
   - `sandbox`: Adds the CLI's terminal sandbox restrictions.
   - `full`: Passes `--dangerously-skip-permissions` to the CLI. Rejected unless `AGY_MCP_ALLOW_FULL_AUTONOMY=true` is set in the server environment.
 - `AGY_MCP_ALLOWED_ROOT`, when set, permits only canonical workspaces beneath that root. This restricts **workspace selection only**; it does **not** sandbox a child process's filesystem or network access.
-- **Command Guard (`--install-guard`) & Fixed Deny Rules**:
-  - Running `agy-orch-mcp --install-guard` adds one environment-gated `PreToolUse` hook named `agy-orch-mcp-guard` to `~/.gemini/config/hooks.json` (preserving any other hooks and writing a timestamped `.bak` backup); `agy-orch-mcp --uninstall-guard` removes it.
-  - The hook evaluates `run_command` tool calls only when the bridge sets `AGY_ORCH_MCP_GUARD=1`, so interactive or non-bridge `agy` sessions are unaffected. Measured `agy` behavior: a hook returning `"ask"` auto-approves in headless mode (so the guard never returns `"ask"`), whereas an empty hook response abstains.
+- **Command Guard (`--install-guard`), Subagent Model Hook & Fixed Deny Rules**:
+  - Running `agy-orch-mcp --install-guard` adds one environment-gated lifecycle hook named `agy-orch-mcp-guard` (`SessionStart` + `PreToolUse` for `run_command`, `swarm`, and `invoke_subagent`) to `~/.gemini/config/hooks.json` (preserving any other hooks and writing a timestamped `.bak` backup); `agy-orch-mcp --uninstall-guard` removes it.
+  - The hook evaluates `run_command` tool calls only when the bridge sets `AGY_ORCH_MCP_GUARD=1`, and injects/enforces `AGY_MCP_SUBAGENT_MODEL` (`AGY_ORCH_MCP_SUBAGENT_MODEL`) on `SessionStart`, `swarm`, and `invoke_subagent` only for bridge-spawned sessions, so interactive or non-bridge `agy` sessions are unaffected. Measured `agy` behavior: a hook returning `"ask"` auto-approves in headless mode (so the guard never returns `"ask"`), whereas an empty hook response abstains.
   - When active, the guard returns `"deny"` for remote-changing `git`/`gh` operations (`git push`, mutating `gh pr`/`issue`/`repo`/`release`/`workflow`/`run`/`secret`/`variable`/`label` subcommands, and `gh api` without an explicit `GET` method, including via `sh -c`, `xargs`, `env`, or `timeout`/`nohup`/`nice` wrappers) and for unquoted redirection or command substitution (`>`, `<`, `$(`, backticks) with an actionable reason the worker can act on. For everything else, it returns `"deny_unless_prior_grant"` (with targeted rewrite hints for path-qualified binaries, Go templates `{{`, unquoted parentheses, and env prefixes) so a command missing from `permissions.allow` reports a tool error to the worker instead of aborting the headless turn.
   - In `safe` and `sandbox` modes, the bridge also always passes fixed deny rules (`command(git push)` and mutating `command(gh ...)`) via `--settings`, which `agy` merges with the user's allow list.
   - `agy-orch-mcp --doctor` reports the guard hook status (`installed`, `missing`, or `outdated`) and audits `~/.gemini/antigravity-cli/settings.json` for permission risks (`high`, `medium`, `low`). Disable guarding on the server with `AGY_MCP_GUARD=off`.
@@ -94,7 +99,7 @@ When opted in via `AGY_MCP_ENABLE_BATCH=true` and `AGY_MCP_ENABLE_FETCH=true` (o
 - **Ownership vs. Reference Scope**: `task.owns` specifies the exact file paths/globs the worker has permission to edit (`owns ⊆ scope.include` and `owns ∩ scope.exclude = ∅`). `scope.include` defines broader read/reference visibility.
 - **Gate Command Execution**: `gate.command` requires an explicit argv array (`string[]`), never raw shell strings, preventing shell injection or unmonitored subshell expansion.
 - **Containment Model**: Worktree isolation, static path validation, and argv execution provide defense-in-depth application boundaries; they do **not** constitute an operating-system-level sandbox.
-- **Bounded Retries, Deadlines & Clamping**: Batches enforce execution limits (up to 50 worker calls, 16 parallel tasks, 7,200,000ms / 2h wall time). Requested budget values exceeding server limits are automatically clamped and reported in `budget_adjustments` rather than rejected. Bounded execution loops are tracked by `budget.max_worker_calls`, `max_repair_attempts`, `max_replans`, and `wall_time_ms`. Per-turn worker timeouts are capped at `900,000` ms (15 minutes); when a worker turn hits the cap, the scheduler automatically resumes it in the same worktree and conversation with a bridge-written resume prompt, counted against `max_worker_calls`. Effort-suffixed model slugs (such as `gemini-4-argon-high`) are resolved without passing a conflicting `--effort low` flag. Periodic progress notifications (heartbeat) are emitted when a `progressToken` is supplied.
+- **Bounded Retries, Deadlines & Clamping**: Batches enforce execution limits (up to 50 worker calls, 16 parallel tasks, 7,200,000ms / 2h wall time). Requested budget values exceeding server limits are automatically clamped and reported in `budget_adjustments` rather than rejected. Bounded execution loops are tracked by `budget.max_worker_calls`, `max_repair_attempts`, `max_replans`, and `wall_time_ms`. Per-turn worker timeouts are capped at `900,000` ms (15 minutes); when a worker turn hits the cap, the scheduler automatically resumes it in the same worktree and conversation with a bridge-written resume prompt, counted against `max_worker_calls`. Effort-suffixed model slugs (such as `gemini-4-carbon-high` or `gemini-4-argon-medium`) are resolved without passing a conflicting `--effort low` flag. Periodic progress notifications (heartbeat) are emitted when a `progressToken` is supplied.
 - **Token Budget, Preflight Capacity & Dynamic Digest**: Output is summarized within `return.max_tokens` (default 1400) using deterministic progressive shedding accounting for the entire MCP envelope. Upfront preflight validation rejects impossible budgets before worker or worktree creation, preserving `CAPACITY_EXCEEDED` and recovery pointers. (Phase 6 semantic compression is optional and not implemented; real-world 20+20 host rollout benchmarks were not run).
 - **Safe Artifact Fetching & Raw Capture Fidelity**: `antigravity_fetch` retrieves full or sliced outputs using logical selectors (`task:<id>:stdout`, `task:<id>:stderr`, `task:<id>:patch`, `gate:<id>:stdout`, `gate:<id>:stderr`, `manifest`, `digest`, `request`, `plan`, `events`) or artifact IDs with cursor pagination (`byte_offset`). Physical CLI stream-json stdout and stderr are faithfully preserved in batch task artifacts for post-run recovery, while internal raw stdout is strictly omitted from legacy MCP tool outputs. Raw filesystem paths are rejected.
 - **Minimal Tool Surface (`AGY_MCP_TOOL_SURFACE=batch`)**: Suppresses legacy `antigravity_run`, `antigravity_continue`, and `antigravity_models` tools, publishing only `antigravity_batch` and `antigravity_fetch` to conserve host context tokens.
@@ -249,27 +254,28 @@ When introducing these templates to an existing project, **merge** the rules int
 
 ## Configuration Reference
 
-| Variable                        | Default                                           | Meaning                                                                                                         |
-| ------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `AGY_MCP_BIN`                   | `agy`                                             | CLI executable name, or an absolute or relative path to the executable.                                         |
-| `AGY_MCP_DEFAULT_WORKSPACE`     | server current directory                          | Default workspace directory.                                                                                    |
-| `AGY_MCP_ALLOWED_ROOT`          | unset                                             | Optional canonical root restricting permitted workspaces.                                                       |
-| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-argon-high`                             | Default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-argon-high`.             |
-| `AGY_MCP_FAST_MODEL`            | unset                                             | Optional fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.                                 |
-| `AGY_MCP_REASONING_MODEL`       | unset                                             | Optional reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.                         |
-| `AGY_MCP_ENABLE_BATCH`          | `false`                                           | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch)                     |
-| `AGY_MCP_ENABLE_FETCH`          | `false`                                           | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch)                     |
-| `AGY_MCP_TOOL_SURFACE`          | `all`                                             | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).                        |
-| `AGY_MCP_MAX_CONCURRENT`        | `8`                                               | Maximum simultaneous CLI child processes (1–32).                                                                |
-| `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                                           | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).                       |
-| `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                                         | Cumulative `total_tokens` per conversation after which results set `context.rotate_recommended` (1–1000000000). |
-| `AGY_MCP_MAX_BUFFER_BYTES`      | `8388608`                                         | Maximum captured CLI stdout buffer per process before termination (1024–67108864).                              |
-| `AGY_MCP_ALLOW_FULL_AUTONOMY`   | `false`                                           | Set to `true` to permit requests with `autonomy: "full"`.                                                       |
-| `AGY_MCP_GUARD`                 | `on`                                              | Command guard (`on` or `off`). Sets `AGY_ORCH_MCP_GUARD=1` and checks `--install-guard` status when `on`.       |
-| `AGY_MCP_ENV_ISOLATION`         | `full`                                            | Per-conversation environment isolation mode (`full`, `install`, or `off`).                                      |
-| `AGY_MCP_ENV_ROOT`              | `<XDG_STATE_HOME or ~/.local/state>/agy-orch/env` | Root directory for per-conversation isolated environments (pruned after 24h at startup).                        |
-| `AGY_MCP_TASKS`                 | `auto`                                            | MCP Tasks extension (`io.modelcontextprotocol/tasks`, revision `2026-07-28`): `auto` (default) or `off`.        |
-| `AGY_ORCH_STORAGE_DIR`          | unset                                             | Optional directory for artifact store and telemetry (defaults to XDG state/cache path).                         |
+| Variable                        | Default                                            | Meaning                                                                                                         |
+| ------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `AGY_MCP_BIN`                   | `agy`                                              | CLI executable name, or an absolute or relative path to the executable.                                         |
+| `AGY_MCP_DEFAULT_WORKSPACE`     | server current directory                           | Default workspace directory.                                                                                    |
+| `AGY_MCP_ALLOWED_ROOT`          | unset                                              | Optional canonical root restricting permitted workspaces.                                                       |
+| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-carbon-high`                             | Default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-carbon-high`.            |
+| `AGY_MCP_SUBAGENT_MODEL`        | `gemini-4-argon-medium`                            | Subagent / swarm worker model slug enforced via `--install-guard` (`SessionStart` + `PreToolUse`).              |
+| `AGY_MCP_FAST_MODEL`            | `AGY_MCP_SUBAGENT_MODEL` (`gemini-4-argon-medium`) | Fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.                                          |
+| `AGY_MCP_REASONING_MODEL`       | `AGY_MCP_DEFAULT_MODEL` (`gemini-4-carbon-high`)   | Reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.                                  |
+| `AGY_MCP_ENABLE_BATCH`          | `false`                                            | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch)                     |
+| `AGY_MCP_ENABLE_FETCH`          | `false`                                            | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch)                     |
+| `AGY_MCP_TOOL_SURFACE`          | `all`                                              | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).                        |
+| `AGY_MCP_MAX_CONCURRENT`        | `8`                                                | Maximum simultaneous CLI child processes (1–32).                                                                |
+| `AGY_MCP_MAX_OUTPUT_CHARS`      | `40000`                                            | Maximum characters in MCP tool response representation (1024–1000000; 16000 recommended).                       |
+| `AGY_MCP_CONTEXT_ROTATE_TOKENS` | `2000000`                                          | Cumulative `total_tokens` per conversation after which results set `context.rotate_recommended` (1–1000000000). |
+| `AGY_MCP_MAX_BUFFER_BYTES`      | `8388608`                                          | Maximum captured CLI stdout buffer per process before termination (1024–67108864).                              |
+| `AGY_MCP_ALLOW_FULL_AUTONOMY`   | `false`                                            | Set to `true` to permit requests with `autonomy: "full"`.                                                       |
+| `AGY_MCP_GUARD`                 | `on`                                               | Command guard (`on` or `off`). Sets `AGY_ORCH_MCP_GUARD=1` and checks `--install-guard` status when `on`.       |
+| `AGY_MCP_ENV_ISOLATION`         | `full`                                             | Per-conversation environment isolation mode (`full`, `install`, or `off`).                                      |
+| `AGY_MCP_ENV_ROOT`              | `<XDG_STATE_HOME or ~/.local/state>/agy-orch/env`  | Root directory for per-conversation isolated environments (pruned after 24h at startup).                        |
+| `AGY_MCP_TASKS`                 | `auto`                                             | MCP Tasks extension (`io.modelcontextprotocol/tasks`, revision `2026-07-28`): `auto` (default) or `off`.        |
+| `AGY_ORCH_STORAGE_DIR`          | unset                                              | Optional directory for artifact store and telemetry (defaults to XDG state/cache path).                         |
 
 ## Development
 

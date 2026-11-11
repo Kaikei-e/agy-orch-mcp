@@ -35,7 +35,12 @@
 
 1. ツール呼び出し時（`antigravity_run` / `antigravity_continue`）に明示された `model` 引数
 2. サーバー環境変数 `AGY_MCP_DEFAULT_MODEL`（設定されている場合）
-3. サーバー組み込みの既定モデル（`gemini-4-argon-high`）
+3. サーバー組み込みの既定モデル（`gemini-4-carbon-high`）
+
+サブエージェントおよびバッチワーカーのモデル解決は以下の通りです：
+
+- `AGY_MCP_SUBAGENT_MODEL` の既定値は `gemini-4-argon-medium` です。`--install-guard` フックが導入されている場合、`agy-orch-mcp` 経由の `agy` セッションでは `SessionStart` のシステムメッセージ注入および `PreToolUse` の引数上書きにより、`swarm`（`action: "add"`）のモデル未指定時は `AGY_MCP_SUBAGENT_MODEL` が、`invoke_subagent` の `Model` 未指定 / `"inherit"` 時は対応するサブエージェント tier が自動的に適用されます。
+- `antigravity_batch` では、`fast` tier ワーカーの既定値は `AGY_MCP_FAST_MODEL`（未設定時は `AGY_MCP_SUBAGENT_MODEL` = `gemini-4-argon-medium`）、`reasoning` tier ワーカー（およびエスカレーション先）の既定値は `AGY_MCP_REASONING_MODEL`（未設定時は `AGY_MCP_DEFAULT_MODEL` = `gemini-4-carbon-high`）となります。
 
 利用可能なモデル slug は `antigravity_models` で事前に取得し、キャッシュまたは設定に利用してください。
 
@@ -51,9 +56,9 @@
   - `sandbox`: CLI のターミナルサンドボックス制限を追加します。
   - `full`: CLI に `--dangerously-skip-permissions` を渡します。サーバー環境で `AGY_MCP_ALLOW_FULL_AUTONOMY=true` が設定されていない限り拒否されます。
 - `AGY_MCP_ALLOWED_ROOT` を設定した場合、指定ルート配下の正規化パスのみをワークスペースとして許可します。これは**ワークスペースの選択のみを制限**するものであり、子プロセスのファイルシステムアクセスやネットワークアクセスを隔離（サンドボックス化）するものではありません。
-- **コマンドガード (`--install-guard`) と固定 deny ルール**:
-  - `agy-orch-mcp --install-guard` を実行すると、`~/.gemini/config/hooks.json` に環境変数ゲート付きの `PreToolUse` フック（名称 `agy-orch-mcp-guard`）を 1 件追加します（既存の他フックは維持され、タイムスタンプ付きの `.bak` バックアップが作成されます）。`agy-orch-mcp --uninstall-guard` で削除できます。
-  - フックはブリッジが `AGY_ORCH_MCP_GUARD=1` を設定したときのみ判定を行うため、通常の `agy` セッションには影響しません。実測された `agy` の仕様として、headless モードでフックが `"ask"` を返すと自動承認されてしまうため本ガードは `"ask"` を一切使用せず、環境変数が未設定のときは空出力を返して判定を棄権（abstain）します。
+- **コマンドガード (`--install-guard`)・サブエージェントモデル制御と固定 deny ルール**:
+  - `agy-orch-mcp --install-guard` を実行すると、`~/.gemini/config/hooks.json` に環境変数ゲート付きのライフサイクルフック（名称 `agy-orch-mcp-guard`: `SessionStart` + `PreToolUse` の `run_command` / `swarm` / `invoke_subagent`）を追加します（既存の他フックは維持され、タイムスタンプ付きの `.bak` バックアップが作成されます）。`agy-orch-mcp --uninstall-guard` で削除できます。
+  - フックはブリッジが `AGY_ORCH_MCP_GUARD=1` や `AGY_ORCH_MCP_SUBAGENT_MODEL` を設定したときのみ動作するため、通常の対話的な `agy` セッションには影響しません。実測された `agy` の仕様として、headless モードでフックが `"ask"` を返すと自動承認されてしまうため本ガードは `"ask"` を一切使用せず、環境変数が未設定のときは空出力を返して判定を棄権（abstain）します。
   - ガード有効時は、リモートを変更する `git` / `gh` 操作（`git push`、`gh pr` / `issue` / `repo` / `release` / `workflow` / `run` / `secret` / `variable` / `label` の変更系サブコマンド、明示的な `GET` なしの `gh api`。`sh -c`、`xargs`、`env`、`timeout` 等のラッパー経由を含む）およびクォートされていないリダイレクト・コマンド置換（`>`、`<`、`$(`、バッククォート）をワーカーが対処可能な理由付きで `"deny"` します。それ以外の全コマンドには `"deny_unless_prior_grant"`（パス付きバイナリ、Go テンプレート `{{`、未クォート括弧、環境変数プレフィックスに対する書き換えヒント付き）を返し、allow ルール不足で headless ターン全体が即終了するのを防ぎます。
   - またブリッジは `safe` / `sandbox` 時に常に固定の deny ルール（`command(git push)` および変更系 `command(gh ...)`）を `--settings` で渡します（ユーザーの allow リストとマージされます）。
   - `agy-orch-mcp --doctor` はガードフックの状態（`installed` / `missing` / `outdated`）と `~/.gemini/antigravity-cli/settings.json` のパーミッション監査（`high` / `medium` / `low`）を表示します。`AGY_MCP_GUARD=off` で無効化できます。
@@ -91,7 +96,7 @@
 
 - **分離 Worktree とパッチ成果物**: 各タスクは独立した Git worktree で実行され、検証後の変更は `final.patch` 成果物として保存されます（ホストの作業ツリーは直接変更されません）。`workspace.dirty_policy` は `"reject"` であり、クリーンな Git 作業ツリーが必要です。
 - **所有権とゲート実行**: `task.owns` は編集許可パス（`owns ⊆ scope.include` かつ `owns ∩ scope.exclude = ∅`）を定義し、`gate.command` は明示的な引数配列（`string[]`）を受け取ります。
-- **1 ターン上限と自動再開・モデル解決**: バッチワーカーの 1 ターンあたりのタイムアウトは `900,000` ms（15 分）に制限されます。ターンが上限に達した場合は、同じ worktree と同じ会話（`conversation_id`）のままブリッジが生成した再開プロンプトで自動的に継続実行され、`max_worker_calls` にカウントされます。また、`gemini-4-argon-high` のように effort サフィックスを持つモデル slug に対して `--effort low` を重複指定して失敗する不具合を修正しています。
+- **1 ターン上限と自動再開・モデル解決**: バッチワーカーの 1 ターンあたりのタイムアウトは `900,000` ms（15 分）に制限されます。ターンが上限に達した場合は、同じ worktree と同じ会話（`conversation_id`）のままブリッジが生成した再開プロンプトで自動的に継続実行され、`max_worker_calls` にカウントされます。また、`gemini-4-carbon-high` や `gemini-4-argon-medium` のように effort サフィックスを持つモデル slug に対して `--effort low` を重複指定して失敗する不具合を修正しています。
 
 ## 並列実行、タイムアウト、境界のあるエラー復旧
 
@@ -246,9 +251,10 @@ git status --short
 | `AGY_MCP_BIN`                   | `agy`                                                 | CLI 実行ファイル名、または絶対パス・相対パス。                                                          |
 | `AGY_MCP_DEFAULT_WORKSPACE`     | サーバー実行時ディレクトリ                            | 既定のワークスペース。                                                                                  |
 | `AGY_MCP_ALLOWED_ROOT`          | 未設定                                                | 選択可能なワークスペースを制限する正規化ルートディレクトリ。                                            |
-| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-argon-high`                                 | 既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-argon-high`。         |
-| `AGY_MCP_FAST_MODEL`            | 未設定                                                | バッチタスクで `worker.tier: "fast"` が指定された際の任意モデル slug。                                  |
-| `AGY_MCP_REASONING_MODEL`       | 未設定                                                | `worker.tier: "reasoning"` または修復エスカレーション時の任意モデル slug。                              |
+| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-carbon-high`                                | 既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-carbon-high`。        |
+| `AGY_MCP_SUBAGENT_MODEL`        | `gemini-4-argon-medium`                               | サブエージェント / Swarm ワーカー用モデル slug（`--install-guard` のフックで適用）。                    |
+| `AGY_MCP_FAST_MODEL`            | `AGY_MCP_SUBAGENT_MODEL`（`gemini-4-argon-medium`）   | バッチタスクで `worker.tier: "fast"` が指定された際のモデル slug。                                      |
+| `AGY_MCP_REASONING_MODEL`       | `AGY_MCP_DEFAULT_MODEL`（`gemini-4-carbon-high`）     | `worker.tier: "reasoning"` または修復エスカレーション時のモデル slug。                                  |
 | `AGY_MCP_ENABLE_BATCH`          | `false`                                               | `true` で `antigravity_batch` ツールを公開（surface=batch 時は自動で true）。                           |
 | `AGY_MCP_ENABLE_FETCH`          | `false`                                               | `true` で `antigravity_fetch` ツールを公開（surface=batch 時は自動で true）。                           |
 | `AGY_MCP_TOOL_SURFACE`          | `all`                                                 | 公開ツールプロファイル: `all`（既定）、`compat`、または `batch`（batch/fetch のみ公開）。               |

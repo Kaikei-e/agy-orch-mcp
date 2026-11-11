@@ -191,10 +191,18 @@ export class Scheduler {
       });
 
     // Model routing configuration wired to BridgeConfig
+    const fastTierModel = opts.config.fastModel ?? opts.config.defaultModel;
+    const reasoningTierModel =
+      opts.config.reasoningModel ??
+      (fastTierModel &&
+      opts.config.defaultModel &&
+      fastTierModel !== opts.config.defaultModel
+        ? opts.config.defaultModel
+        : undefined);
     this.routing = opts.routing ?? {
       tiers: {
-        fast: { model: opts.config.fastModel ?? opts.config.defaultModel },
-        reasoning: { model: opts.config.reasoningModel },
+        fast: { model: fastTierModel },
+        reasoning: { model: reasoningTierModel },
       },
     };
 

@@ -47,7 +47,7 @@
   - **Claude Code**: MCP の `annotations.readOnlyHint: true` を内部の `isConcurrencySafe()` 判定にマッピングするため、同一メッセージ内で複数の `antigravity_run` / `antigravity_continue`（別会話 ID）を発行するとそのまま並列実行されます。**並列化のためのリレー用サブエージェントは不要です**（アップグレード後は実行中サーバーがアノテーションを広告するよう `dist` を再ビルドしてください）。また、Claude Code は 2 分を超える MCP 呼び出しを自動的にバックグラウンドへ移行します（`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`）。
   - **Codex CLI / IDE**: MCP サーバー設定に `supports_parallel_tool_calls = true` を指定すると、同一ターン内の複数ツール呼び出しが並列実行されます。
 - **モデルの選定とキャッシュ**:
-  - 利用可能なモデル slug は事前に `antigravity_models` で確認・キャッシュして使用するか、サーバー環境変数 `AGY_MCP_DEFAULT_MODEL` / CLI 既定値を利用し、モデル選定のための無駄なターン消費を抑えます。
+  - サーバー既定モデルは `gemini-4-carbon-high`（`AGY_MCP_DEFAULT_MODEL`）、内部サブエージェント / Swarm ワーカーおよび `antigravity_batch` の `fast` ワーカー既定モデルは `gemini-4-argon-medium`（`AGY_MCP_SUBAGENT_MODEL` / `AGY_MCP_FAST_MODEL`）です。利用可能なモデル slug は事前に `antigravity_models` で確認・キャッシュして使用するか、サーバー既定値を利用し、モデル選定のための無駄なターン消費を抑えます。
 
 ## 境界のあるエラー復旧 (Bounded Recovery)
 

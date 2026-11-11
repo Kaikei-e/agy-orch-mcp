@@ -808,8 +808,25 @@ export function evaluateCommand(commandLine: string): GuardVerdict {
 }
 
 export const GUARD_ENV = "AGY_ORCH_MCP_GUARD";
+export const SUBAGENT_MODEL_ENV = "AGY_ORCH_MCP_SUBAGENT_MODEL";
 export const GUARD_HOOK_NAME = "agy-orch-mcp-guard";
 export type GuardStatus = "installed" | "missing" | "outdated";
+export type SubagentTier = "flash_lite" | "flash" | "pro";
+
+export function resolveSubagentTier(subagentModel: string): SubagentTier {
+  if (/flash[-_]lite/i.test(subagentModel)) return "flash_lite";
+  if (/flash/i.test(subagentModel)) return "flash";
+  return "pro";
+}
+
+export function subagentSessionMessage(subagentModel: string): string {
+  const tier = resolveSubagentTier(subagentModel);
+  return (
+    `Subagent/Swarm model policy (agy-orch-mcp): ` +
+    `When spawning native swarm workers (\`swarm\` with \`action: "add"\`), pass \`model: "${subagentModel}"\` unless the user prompt explicitly requests another model. ` +
+    `When invoking subagents (\`invoke_subagent\`), pass \`Model: "${tier}"\` instead of \`"inherit"\` unless the user prompt explicitly requests another tier.`
+  );
+}
 
 export function defaultHooksPath(home = homedir()): string {
   return path.join(home, ".gemini", "config", "hooks.json");
@@ -823,54 +840,83 @@ export function guardHookCommand(
   nodeBin: string,
   hookScriptPath: string,
 ): string {
-  return `if [ -n "$${GUARD_ENV}" ]; then exec ${posixSingleQuote(nodeBin)} ${posixSingleQuote(hookScriptPath)}; else cat >/dev/null; fi`;
+  return `if [ -n "$${GUARD_ENV}" ] || [ -n "$${SUBAGENT_MODEL_ENV}" ]; then exec ${posixSingleQuote(nodeBin)} ${posixSingleQuote(hookScriptPath)}; else cat >/dev/null; fi`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const PRE_TOOL_MATCHERS = ["run_command", "swarm", "invoke_subagent"] as const;
+
 function buildGuardEntry(command: string): Record<string, unknown> {
   return {
-    PreToolUse: [
+    SessionStart: [
       {
-        matcher: "run_command",
-        hooks: [
-          {
-            type: "command",
-            command,
-            timeout: 10,
-          },
-        ],
+        type: "command",
+        command,
+        timeout: 10,
       },
     ],
+    PreToolUse: PRE_TOOL_MATCHERS.map((matcher) => ({
+      matcher,
+      hooks: [
+        {
+          type: "command",
+          command,
+          timeout: 10,
+        },
+      ],
+    })),
   };
 }
 
-function isMatchingGuardEntry(
-  entry: unknown,
+function isMatchingHookHandler(
+  hook: unknown,
   expectedCommand: string,
 ): boolean {
-  if (!isRecord(entry) || Object.keys(entry).length !== 1) return false;
-  const preToolUse = entry.PreToolUse;
-  if (!Array.isArray(preToolUse) || preToolUse.length !== 1) return false;
-  const rule = preToolUse[0];
-  if (
-    !isRecord(rule) ||
-    Object.keys(rule).length !== 2 ||
-    rule.matcher !== "run_command" ||
-    !Array.isArray(rule.hooks) ||
-    rule.hooks.length !== 1
-  ) {
-    return false;
-  }
-  const hook = rule.hooks[0];
   if (!isRecord(hook) || Object.keys(hook).length !== 3) return false;
   return (
     hook.type === "command" &&
     hook.command === expectedCommand &&
     hook.timeout === 10
   );
+}
+
+function isMatchingGuardEntry(
+  entry: unknown,
+  expectedCommand: string,
+): boolean {
+  if (!isRecord(entry) || Object.keys(entry).length !== 2) return false;
+  const sessionStart = entry.SessionStart;
+  if (
+    !Array.isArray(sessionStart) ||
+    sessionStart.length !== 1 ||
+    !isMatchingHookHandler(sessionStart[0], expectedCommand)
+  ) {
+    return false;
+  }
+  const preToolUse = entry.PreToolUse;
+  if (
+    !Array.isArray(preToolUse) ||
+    preToolUse.length !== PRE_TOOL_MATCHERS.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < PRE_TOOL_MATCHERS.length; i++) {
+    const rule = preToolUse[i];
+    if (
+      !isRecord(rule) ||
+      Object.keys(rule).length !== 2 ||
+      rule.matcher !== PRE_TOOL_MATCHERS[i] ||
+      !Array.isArray(rule.hooks) ||
+      rule.hooks.length !== 1 ||
+      !isMatchingHookHandler(rule.hooks[0], expectedCommand)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function guardStatus(

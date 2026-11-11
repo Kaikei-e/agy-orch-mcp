@@ -45,6 +45,15 @@ test("CLI --help includes guard flags and new environment variables", (t) => {
   assert.match(res.stdout, /--install-guard/);
   assert.match(res.stdout, /--uninstall-guard/);
   assert.match(res.stdout, /--doctor/);
+  assert.match(
+    res.stdout,
+    /AGY_MCP_DEFAULT_MODEL \(default gemini-4-carbon-high\)/,
+  );
+  assert.match(
+    res.stdout,
+    /AGY_MCP_SUBAGENT_MODEL \(default gemini-4-argon-medium\)/,
+  );
+  assert.match(res.stdout, /AGY_MCP_FAST_MODEL/);
   assert.match(res.stdout, /AGY_MCP_GUARD/);
   assert.match(res.stdout, /AGY_MCP_ENV_ISOLATION/);
   assert.match(res.stdout, /AGY_MCP_ENV_ROOT/);
@@ -66,9 +75,36 @@ test("CLI --install-guard and --uninstall-guard manage hooks.json and print stat
 
   const parsedHooks = JSON.parse(readFileSync(hooksPath, "utf8"));
   assert.deepEqual(parsedHooks[GUARD_HOOK_NAME], {
+    SessionStart: [
+      {
+        type: "command",
+        command: expectedCommand,
+        timeout: 10,
+      },
+    ],
     PreToolUse: [
       {
         matcher: "run_command",
+        hooks: [
+          {
+            type: "command",
+            command: expectedCommand,
+            timeout: 10,
+          },
+        ],
+      },
+      {
+        matcher: "swarm",
+        hooks: [
+          {
+            type: "command",
+            command: expectedCommand,
+            timeout: 10,
+          },
+        ],
+      },
+      {
+        matcher: "invoke_subagent",
         hooks: [
           {
             type: "command",
@@ -199,6 +235,9 @@ test("CLI --doctor reports guard status (missing, outdated, installed) and permi
   );
   const cleanDoc = runCli(["--doctor"], tempHome);
   assert.equal(cleanDoc.status, 0);
+  assert.match(cleanDoc.stdout, /Default model:\s*gemini-4-carbon-high/);
+  assert.match(cleanDoc.stdout, /Subagent model:\s*gemini-4-argon-medium/);
+  assert.match(cleanDoc.stdout, /Fast worker model:\s*gemini-4-argon-medium/);
   assert.match(cleanDoc.stdout, /Guard hook:\s*installed/i);
   assert.match(cleanDoc.stdout, /0 high.*0 medium.*0 low/i);
 });
