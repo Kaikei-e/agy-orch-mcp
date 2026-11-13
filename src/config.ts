@@ -9,8 +9,9 @@ import { DEFAULT_SERVER_LIMITS } from "./domain/limits.js";
 
 export type ToolSurface = "all" | "batch";
 
-export const DEFAULT_MODEL = "gemini-4-carbon-high";
+export const DEFAULT_MODEL = "gemini-4-hydrogen-high";
 export const DEFAULT_SUBAGENT_MODEL = "gemini-4-argon-medium";
+export const DEFAULT_REASONING_MODEL = "gemini-4-carbon-high";
 
 export interface Config {
   bin: string;
@@ -170,7 +171,7 @@ export function loadConfig(
       "AGY_MCP_FAST_MODEL",
     ),
     reasoningModel: validateModelSlug(
-      env.AGY_MCP_REASONING_MODEL,
+      env.AGY_MCP_REASONING_MODEL ?? DEFAULT_REASONING_MODEL,
       "AGY_MCP_REASONING_MODEL",
     ),
     maxOutputChars: integer(

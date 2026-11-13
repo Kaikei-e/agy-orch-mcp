@@ -12,10 +12,10 @@ test("loadConfig provides safe defaults with batch disabled and all tool surface
   assert.equal(config.enableBatch, false);
   assert.equal(config.enableFetch, false);
   assert.equal(config.toolSurface, "all");
-  assert.equal(config.defaultModel, "gemini-4-carbon-high");
+  assert.equal(config.defaultModel, "gemini-4-hydrogen-high");
   assert.equal(config.subagentModel, "gemini-4-argon-medium");
   assert.equal(config.fastModel, "gemini-4-argon-medium");
-  assert.equal(config.reasoningModel, undefined);
+  assert.equal(config.reasoningModel, "gemini-4-carbon-high");
   assert.equal(config.allowFullAutonomy, false);
   assert.equal(config.maxConcurrent, 8);
   assert.equal(config.limits.maxParallelism, 8);

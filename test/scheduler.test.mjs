@@ -1295,7 +1295,7 @@ test("Runtime Scheduler Suite", async (t) => {
   );
 
   await t.test(
-    "Blocks false same-model escalation when fastModel equals defaultModel and reasoningModel is unset",
+    "Blocks false same-model escalation when the reasoning tier resolves to the fast-tier model",
     async () => {
       const { tmpDir, baseRev } = await createTempRepo();
       try {

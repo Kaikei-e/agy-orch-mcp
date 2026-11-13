@@ -35,12 +35,12 @@ Model selection resolves in the following order:
 
 1. The explicit `model` argument provided in the MCP tool call (`antigravity_run` or `antigravity_continue`).
 2. The server environment variable `AGY_MCP_DEFAULT_MODEL` (if set and non-empty).
-3. The server built-in default model (`gemini-4-carbon-high`).
+3. The server built-in default model (`gemini-4-hydrogen-high`).
 
 Subagents and worker tiers resolve as follows:
 
 - `AGY_MCP_SUBAGENT_MODEL` defaults to `gemini-4-argon-medium`. When the `--install-guard` hook is installed, `agy` sessions spawned by `agy-orch-mcp` receive `SessionStart` guidance and `PreToolUse` enforcement (`swarm` `action: "add"` defaults to `AGY_MCP_SUBAGENT_MODEL`, and `invoke_subagent` `Model: "inherit"` / omitted is rewritten to the matching subagent tier).
-- In `antigravity_batch`, `fast` tier workers default to `AGY_MCP_FAST_MODEL` (falling back to `AGY_MCP_SUBAGENT_MODEL`, default `gemini-4-argon-medium`) and `reasoning` tier workers default to `AGY_MCP_REASONING_MODEL` (falling back to `AGY_MCP_DEFAULT_MODEL`, default `gemini-4-carbon-high`).
+- In `antigravity_batch`, `fast` tier workers default to `AGY_MCP_FAST_MODEL` (falling back to `AGY_MCP_SUBAGENT_MODEL`, default `gemini-4-argon-medium`) and `reasoning` tier workers (including escalated repairs) default to `AGY_MCP_REASONING_MODEL` (default `gemini-4-carbon-high`). Escalation is skipped when the reasoning tier would resolve to the same model as the fast tier.
 
 Query available model slugs using `antigravity_models`, then cache or specify the desired slug.
 
@@ -259,10 +259,10 @@ When introducing these templates to an existing project, **merge** the rules int
 | `AGY_MCP_BIN`                   | `agy`                                              | CLI executable name, or an absolute or relative path to the executable.                                         |
 | `AGY_MCP_DEFAULT_WORKSPACE`     | server current directory                           | Default workspace directory.                                                                                    |
 | `AGY_MCP_ALLOWED_ROOT`          | unset                                              | Optional canonical root restricting permitted workspaces.                                                       |
-| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-carbon-high`                             | Default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-carbon-high`.            |
+| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-hydrogen-high`                           | Default model slug. Precedence: per-call `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-hydrogen-high`.          |
 | `AGY_MCP_SUBAGENT_MODEL`        | `gemini-4-argon-medium`                            | Subagent / swarm worker model slug enforced via `--install-guard` (`SessionStart` + `PreToolUse`).              |
 | `AGY_MCP_FAST_MODEL`            | `AGY_MCP_SUBAGENT_MODEL` (`gemini-4-argon-medium`) | Fast-tier model slug for batch tasks requesting `worker.tier: "fast"`.                                          |
-| `AGY_MCP_REASONING_MODEL`       | `AGY_MCP_DEFAULT_MODEL` (`gemini-4-carbon-high`)   | Reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.                                  |
+| `AGY_MCP_REASONING_MODEL`       | `gemini-4-carbon-high`                             | Reasoning-tier model slug for `worker.tier: "reasoning"` or escalated repairs.                                  |
 | `AGY_MCP_ENABLE_BATCH`          | `false`                                            | Set to `true` to publish the `antigravity_batch` tool (automatically true if surface=batch)                     |
 | `AGY_MCP_ENABLE_FETCH`          | `false`                                            | Set to `true` to publish the `antigravity_fetch` tool (automatically true if surface=batch)                     |
 | `AGY_MCP_TOOL_SURFACE`          | `all`                                              | Tool surface filter: `all` (default), `compat`, or `batch` (publishes only batch/fetch).                        |

@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Built-in default model is now `gemini-4-hydrogen-high` (`AGY_MCP_DEFAULT_MODEL`), and the batch `reasoning` tier (escalated repairs) defaults to `gemini-4-carbon-high` (`AGY_MCP_REASONING_MODEL`) instead of falling back to the default model. Escalation is skipped when the reasoning tier resolves to the fast-tier model, and `--doctor` reports the reasoning worker model.
+
 ### Added
 
 - Machine-extracted `verified_outputs` command ledger (`command`, `status` `completed`/`failed`/`denied`/`background`/`running`, `exit_code`, `output_tail`, `error`, `full_output_path`, `background_task_id`, `duration_seconds`) parsed from the `agy` JSON stream so hosts can verify command execution directly.

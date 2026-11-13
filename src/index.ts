@@ -4,7 +4,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import { DEFAULT_MODEL, DEFAULT_SUBAGENT_MODEL, loadConfig } from "./config.js";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_REASONING_MODEL,
+  DEFAULT_SUBAGENT_MODEL,
+  loadConfig,
+} from "./config.js";
 import {
   defaultHooksPath,
   guardHookCommand,
@@ -25,7 +30,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     process.stdout.write(
-      `agy-orch-mcp ${version}\n\nUsage: agy-orch-mcp [--help | --version | --doctor | --install-guard | --uninstall-guard]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace, CLI flags, guard hook, and permission settings without starting a model turn.\n--install-guard installs or updates the command guard hook in ~/.gemini/config/hooks.json.\n--uninstall-guard removes the command guard hook from ~/.gemini/config/hooks.json.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL (default ${DEFAULT_MODEL}), AGY_MCP_SUBAGENT_MODEL (default ${DEFAULT_SUBAGENT_MODEL}),\nAGY_MCP_FAST_MODEL (default AGY_MCP_SUBAGENT_MODEL), AGY_MCP_REASONING_MODEL (default AGY_MCP_DEFAULT_MODEL),\nAGY_MCP_MAX_CONCURRENT (default 8, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_CONTEXT_ROTATE_TOKENS, AGY_MCP_ALLOW_FULL_AUTONOMY,\nAGY_MCP_GUARD, AGY_MCP_ENV_ISOLATION, AGY_MCP_ENV_ROOT, AGY_MCP_TASKS.\nSee https://github.com/Kaikei-e/agy-orch-mcp for setup.\n`,
+      `agy-orch-mcp ${version}\n\nUsage: agy-orch-mcp [--help | --version | --doctor | --install-guard | --uninstall-guard]\n\nWith no arguments, serves MCP over stdio.\n--doctor checks the workspace, CLI flags, guard hook, and permission settings without starting a model turn.\n--install-guard installs or updates the command guard hook in ~/.gemini/config/hooks.json.\n--uninstall-guard removes the command guard hook from ~/.gemini/config/hooks.json.\n\nSettings: AGY_MCP_BIN, AGY_MCP_DEFAULT_WORKSPACE, AGY_MCP_ALLOWED_ROOT,\nAGY_MCP_DEFAULT_MODEL (default ${DEFAULT_MODEL}), AGY_MCP_SUBAGENT_MODEL (default ${DEFAULT_SUBAGENT_MODEL}),\nAGY_MCP_FAST_MODEL (default AGY_MCP_SUBAGENT_MODEL), AGY_MCP_REASONING_MODEL (default ${DEFAULT_REASONING_MODEL}),\nAGY_MCP_MAX_CONCURRENT (default 8, range 1-32),\nAGY_MCP_MAX_OUTPUT_CHARS, AGY_MCP_MAX_BUFFER_BYTES, AGY_MCP_CONTEXT_ROTATE_TOKENS, AGY_MCP_ALLOW_FULL_AUTONOMY,\nAGY_MCP_GUARD, AGY_MCP_ENV_ISOLATION, AGY_MCP_ENV_ROOT, AGY_MCP_TASKS.\nSee https://github.com/Kaikei-e/agy-orch-mcp for setup.\n`,
     );
     return;
   }
@@ -126,7 +131,7 @@ async function main(): Promise<void> {
       }
 
       process.stdout.write(
-        `Workspace: ${config.defaultWorkspace}\nAllowed root: ${config.allowedRoot ?? "unrestricted"}\nDefault model: ${config.defaultModel ?? "CLI default"}\nSubagent model: ${config.subagentModel ?? "CLI default"}\nFast worker model: ${config.fastModel ?? "CLI default"}\nMax concurrent CLI processes: ${config.maxConcurrent}\nFull autonomy: ${config.allowFullAutonomy ? "enabled" : "disabled"}\n${guardLine}\n${auditLines}\nCLI compatibility checks passed. Authentication and workspace trust require an interactive agy session.\n`,
+        `Workspace: ${config.defaultWorkspace}\nAllowed root: ${config.allowedRoot ?? "unrestricted"}\nDefault model: ${config.defaultModel ?? "CLI default"}\nSubagent model: ${config.subagentModel ?? "CLI default"}\nFast worker model: ${config.fastModel ?? "CLI default"}\nReasoning worker model: ${config.reasoningModel ?? "CLI default"}\nMax concurrent CLI processes: ${config.maxConcurrent}\nFull autonomy: ${config.allowFullAutonomy ? "enabled" : "disabled"}\n${guardLine}\n${auditLines}\nCLI compatibility checks passed. Authentication and workspace trust require an interactive agy session.\n`,
       );
     } finally {
       await runner.close();

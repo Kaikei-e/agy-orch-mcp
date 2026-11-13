@@ -35,12 +35,12 @@
 
 1. ツール呼び出し時（`antigravity_run` / `antigravity_continue`）に明示された `model` 引数
 2. サーバー環境変数 `AGY_MCP_DEFAULT_MODEL`（設定されている場合）
-3. サーバー組み込みの既定モデル（`gemini-4-carbon-high`）
+3. サーバー組み込みの既定モデル（`gemini-4-hydrogen-high`）
 
 サブエージェントおよびバッチワーカーのモデル解決は以下の通りです：
 
 - `AGY_MCP_SUBAGENT_MODEL` の既定値は `gemini-4-argon-medium` です。`--install-guard` フックが導入されている場合、`agy-orch-mcp` 経由の `agy` セッションでは `SessionStart` のシステムメッセージ注入および `PreToolUse` の引数上書きにより、`swarm`（`action: "add"`）のモデル未指定時は `AGY_MCP_SUBAGENT_MODEL` が、`invoke_subagent` の `Model` 未指定 / `"inherit"` 時は対応するサブエージェント tier が自動的に適用されます。
-- `antigravity_batch` では、`fast` tier ワーカーの既定値は `AGY_MCP_FAST_MODEL`（未設定時は `AGY_MCP_SUBAGENT_MODEL` = `gemini-4-argon-medium`）、`reasoning` tier ワーカー（およびエスカレーション先）の既定値は `AGY_MCP_REASONING_MODEL`（未設定時は `AGY_MCP_DEFAULT_MODEL` = `gemini-4-carbon-high`）となります。
+- `antigravity_batch` では、`fast` tier ワーカーの既定値は `AGY_MCP_FAST_MODEL`（未設定時は `AGY_MCP_SUBAGENT_MODEL` = `gemini-4-argon-medium`）、`reasoning` tier ワーカー（およびエスカレーション先）の既定値は `AGY_MCP_REASONING_MODEL`（既定 `gemini-4-carbon-high`）となります。reasoning tier が fast tier と同じモデルに解決される場合、エスカレーションは行いません。
 
 利用可能なモデル slug は `antigravity_models` で事前に取得し、キャッシュまたは設定に利用してください。
 
@@ -251,10 +251,10 @@ git status --short
 | `AGY_MCP_BIN`                   | `agy`                                                 | CLI 実行ファイル名、または絶対パス・相対パス。                                                          |
 | `AGY_MCP_DEFAULT_WORKSPACE`     | サーバー実行時ディレクトリ                            | 既定のワークスペース。                                                                                  |
 | `AGY_MCP_ALLOWED_ROOT`          | 未設定                                                | 選択可能なワークスペースを制限する正規化ルートディレクトリ。                                            |
-| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-carbon-high`                                | 既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-carbon-high`。        |
+| `AGY_MCP_DEFAULT_MODEL`         | `gemini-4-hydrogen-high`                              | 既定モデル slug。優先順位: 個別引数 `model` > `AGY_MCP_DEFAULT_MODEL` > `gemini-4-hydrogen-high`。      |
 | `AGY_MCP_SUBAGENT_MODEL`        | `gemini-4-argon-medium`                               | サブエージェント / Swarm ワーカー用モデル slug（`--install-guard` のフックで適用）。                    |
 | `AGY_MCP_FAST_MODEL`            | `AGY_MCP_SUBAGENT_MODEL`（`gemini-4-argon-medium`）   | バッチタスクで `worker.tier: "fast"` が指定された際のモデル slug。                                      |
-| `AGY_MCP_REASONING_MODEL`       | `AGY_MCP_DEFAULT_MODEL`（`gemini-4-carbon-high`）     | `worker.tier: "reasoning"` または修復エスカレーション時のモデル slug。                                  |
+| `AGY_MCP_REASONING_MODEL`       | `gemini-4-carbon-high`                                | `worker.tier: "reasoning"` または修復エスカレーション時のモデル slug。                                  |
 | `AGY_MCP_ENABLE_BATCH`          | `false`                                               | `true` で `antigravity_batch` ツールを公開（surface=batch 時は自動で true）。                           |
 | `AGY_MCP_ENABLE_FETCH`          | `false`                                               | `true` で `antigravity_fetch` ツールを公開（surface=batch 時は自動で true）。                           |
 | `AGY_MCP_TOOL_SURFACE`          | `all`                                                 | 公開ツールプロファイル: `all`（既定）、`compat`、または `batch`（batch/fetch のみ公開）。               |

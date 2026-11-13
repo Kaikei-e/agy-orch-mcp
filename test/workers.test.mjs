@@ -653,8 +653,17 @@ test("Routing Policy - Model Resolution & Tier Selection", () => {
   assert.equal(fastFallbackRes.effort, "low");
   assert.equal(fastFallbackRes.isExplicit, false);
 
+  // Reasoning tier defaults to gemini-4-carbon-high
+  const defaultReasoningRes = resolveWorkerModel("reasoning", config);
+  assert.equal(defaultReasoningRes.model, "gemini-4-carbon-high");
+  assert.equal(defaultReasoningRes.effort, undefined);
+  assert.equal(defaultReasoningRes.limitationNotice, undefined);
+
   // Reasoning tier uses high effort and reports limitation notice when reasoningModel is absent
-  const reasoningRes = resolveWorkerModel("reasoning", config);
+  const reasoningRes = resolveWorkerModel("reasoning", {
+    ...config,
+    reasoningModel: undefined,
+  });
   assert.equal(reasoningRes.model, "default-gemini");
   assert.equal(reasoningRes.effort, "high");
   assert.equal(reasoningRes.isExplicit, false);
